@@ -4,40 +4,41 @@ import type { SkillId, StatusId, UnitId } from './identifiers'
 export type ModifierSourceId = SkillId | StatusId | UnitId
 
 export interface AttackModifier {
-  sourceId: ModifierSourceId
-  value: number
-  expiresAtTurnEnd: boolean
+  readonly sourceId: ModifierSourceId
+  readonly value: number
+  readonly expiresAtTurnEnd: boolean
 }
 
 export interface NormalDamageReductionSource {
-  sourceId: ModifierSourceId
-  reduction: number
+  readonly sourceId: ModifierSourceId
+  readonly reduction: number
 }
 
 export interface UnitState {
-  id: UnitId
-  name: string
-  camp: Camp
-  system: UnitSystem
-  position: Position | null
-  deploymentOrder: number
-  currentHealth: number
-  maximumHealth: number
-  hasInfiniteHealth: boolean
-  baseAttackAtBattleEntry: number
-  attackModifiers: AttackModifier[]
-  speed: number
-  shield: number
-  criticalRate: number
-  criticalDamage: number
-  normalDamageIncrease: number
-  normalDamageReductionSources: NormalDamageReductionSource[]
-  extraDamageIncrease: number
-  extraDamageReduction: number
-  energy: number
-  momentum: number
-  intent: number
-  magic: number
-  momentumPressure: number
-  alive: boolean
+  readonly id: UnitId
+  readonly name: string
+  readonly camp: Camp
+  readonly system: UnitSystem
+  readonly isBoss: boolean
+  readonly position: Position | null
+  readonly deploymentOrder: number
+  readonly currentHealth: number
+  readonly maximumHealth: number
+  readonly hasInfiniteHealth: boolean
+  readonly baseAttackAtBattleEntry: number
+  readonly attackModifiers: readonly AttackModifier[]
+  readonly speed: number
+  readonly shield: number
+  readonly criticalRate: number
+  readonly criticalDamage: number
+  readonly normalDamageIncrease: number
+  readonly normalDamageReductionSources: readonly NormalDamageReductionSource[]
+  readonly extraDamageIncrease: number
+  readonly extraDamageReduction: number
+  readonly energy: number
+  readonly momentum: number
+  readonly intent: number
+  readonly magic: number
+  readonly momentumPressure: number
+  readonly alive: boolean
 }

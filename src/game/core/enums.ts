@@ -37,11 +37,65 @@ export const BattlePhase = {
   AwaitingAction: 'awaitingAction',
   ResolvingAction: 'resolvingAction',
   TurnEnd: 'turnEnd',
+  UnableToContinue: 'unableToContinue',
   Paused: 'paused',
   Finished: 'finished',
 } as const
 
 export type BattlePhase = (typeof BattlePhase)[keyof typeof BattlePhase]
+
+export const PersonalTurnPhase = {
+  NotStarted: 'notStarted',
+  StartingDelayedEffects: 'startingDelayedEffects',
+  StartingSystemRules: 'startingSystemRules',
+  StartingUnitPassives: 'startingUnitPassives',
+  StartingStatusEffects: 'startingStatusEffects',
+  AwaitingAction: 'awaitingAction',
+  ResolvingAction: 'resolvingAction',
+  Ending: 'ending',
+  EndingTriggeredEffects: 'endingTriggeredEffects',
+  EndingUnitSpecificEffects: 'endingUnitSpecificEffects',
+  EndingStatusEffects: 'endingStatusEffects',
+  EndingSpecialVariables: 'endingSpecialVariables',
+  EndingStatusDurations: 'endingStatusDurations',
+  EndingTemporaryModifiers: 'endingTemporaryModifiers',
+  Ended: 'ended',
+} as const
+
+export type PersonalTurnPhase =
+  (typeof PersonalTurnPhase)[keyof typeof PersonalTurnPhase]
+
+export const TurnStartStage = {
+  DelayedEffects: 'delayedEffects',
+  SystemRules: 'systemRules',
+  UnitPassives: 'unitPassives',
+  StatusEffects: 'statusEffects',
+} as const
+
+export type TurnStartStage =
+  (typeof TurnStartStage)[keyof typeof TurnStartStage]
+
+export const TurnEndStage = {
+  TriggeredEffects: 'triggeredEffects',
+  UnitSpecificEffects: 'unitSpecificEffects',
+  StatusEffects: 'statusEffects',
+  SpecialVariables: 'specialVariables',
+  StatusDurations: 'statusDurations',
+  TemporaryModifiers: 'temporaryModifiers',
+} as const
+
+export type TurnEndStage =
+  (typeof TurnEndStage)[keyof typeof TurnEndStage]
+
+export const ActionLifecycleStage = {
+  OnAction: 'onAction',
+  ResourceValidationAndPayment: 'resourceValidationAndPayment',
+  SkillResolution: 'skillResolution',
+  AfterAction: 'afterAction',
+} as const
+
+export type ActionLifecycleStage =
+  (typeof ActionLifecycleStage)[keyof typeof ActionLifecycleStage]
 
 export const TargetType = {
   Self: 'self',

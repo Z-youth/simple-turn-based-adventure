@@ -11,3 +11,5 @@ export type AttackId = Brand<string, 'AttackId'>
 export type DamageEventId = Brand<string, 'DamageEventId'>
 export type BattleLogEventId = Brand<string, 'BattleLogEventId'>
 export type TriggerLockId = Brand<string, 'TriggerLockId'>
+export type TurnSequenceId = Brand<string, 'TurnSequenceId'>
+export type PersonalTurnId = Brand<string, 'PersonalTurnId'>

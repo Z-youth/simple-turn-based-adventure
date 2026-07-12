@@ -19,6 +19,7 @@ function createUnit(overrides: Partial<UnitState> = {}): UnitState {
     name: 'Test unit',
     camp: Camp.Player,
     system: UnitSystem.Momentum,
+    isBoss: false,
     position: Position.Front1,
     deploymentOrder: 0,
     currentHealth: 100,

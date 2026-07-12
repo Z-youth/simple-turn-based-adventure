@@ -10,20 +10,20 @@ import type {
 } from './identifiers'
 
 export type StatusEffectValue =
-  | { calculation: 'perStack'; value: number }
-  | { calculation: 'total'; value: number }
+  | { readonly calculation: 'perStack'; readonly value: number }
+  | { readonly calculation: 'total'; readonly value: number }
 
 export interface StatusBatch {
-  batchId: StatusBatchId
-  statusId: StatusId
-  sourceUnitId: UnitId
-  stacks: number
-  effect: StatusEffectValue
-  remainingOwnerTurns: number | null
-  acquiredAt: StatusAcquisitionTiming
-  skipNextTurnEndDecrement: boolean
-  stackPolicy: StackPolicy
-  category: StatusCategory
+  readonly batchId: StatusBatchId
+  readonly statusId: StatusId
+  readonly sourceUnitId: UnitId
+  readonly stacks: number
+  readonly effect: StatusEffectValue
+  readonly remainingOwnerTurns: number | null
+  readonly acquiredAt: StatusAcquisitionTiming
+  readonly skipNextTurnEndDecrement: boolean
+  readonly stackPolicy: StackPolicy
+  readonly category: StatusCategory
 }
 
 export function aggregateStatusStacks(

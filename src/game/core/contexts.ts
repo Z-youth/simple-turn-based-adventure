@@ -2,7 +2,9 @@ import type {
   BattleLogEventType,
   BattlePhase,
   DamageType,
+  PersonalTurnPhase,
 } from './enums'
+import type { BattleEvent } from './events'
 import type {
   ActionId,
   AttackId,
@@ -11,85 +13,101 @@ import type {
   SkillBranchId,
   SkillExecutionId,
   SkillId,
+  PersonalTurnId,
+  TurnSequenceId,
   TriggerLockId,
   UnitId,
 } from './identifiers'
 import type { StatusBatch } from './statuses'
 import type { UnitState } from './units'
 
+export interface TurnQueueEntry {
+  readonly unitId: UnitId
+  readonly speedAtSequenceStart: number
+}
+
 export interface TurnSequenceState {
-  sequenceNumber: number
-  orderedUnitIds: UnitId[]
-  currentIndex: number
+  readonly sequenceId: TurnSequenceId
+  readonly sequenceNumber: number
+  readonly queue: readonly TurnQueueEntry[]
+  readonly currentIndex: number
+  readonly completed: boolean
 }
 
 export interface PersonalTurnState {
-  unitId: UnitId
-  sequenceNumber: number
-  actionIds: ActionId[]
-  hasEnded: boolean
+  readonly personalTurnId: PersonalTurnId
+  readonly sequenceId: TurnSequenceId
+  readonly unitId: UnitId
+  readonly sequenceNumber: number
+  readonly phase: PersonalTurnPhase
+  readonly startedActionIds: readonly ActionId[]
+  readonly completedActionIds: readonly ActionId[]
+  readonly countedActionCount: number
 }
 
 export interface ActionContext {
-  actionId: ActionId
-  actorId: UnitId
-  skillExecutionId: SkillExecutionId | null
-  countsAsAction: boolean
-  endsPersonalTurn: boolean
+  readonly actionId: ActionId
+  readonly actorId: UnitId
+  readonly personalTurnId: PersonalTurnId
+  readonly sequenceId: TurnSequenceId
+  readonly skillExecutionId: SkillExecutionId | null
+  readonly countsAsAction: boolean
+  readonly endsTurn: boolean
 }
 
 export interface PerTargetTriggerLock {
-  lockId: TriggerLockId
-  triggeredTargetIds: UnitId[]
+  readonly lockId: TriggerLockId
+  readonly triggeredTargetIds: readonly UnitId[]
 }
 
 export interface SkillContext {
-  skillExecutionId: SkillExecutionId
-  actionId: ActionId | null
-  casterId: UnitId
-  skillId: SkillId
-  branchId: SkillBranchId | null
-  targetIds: UnitId[]
-  perTargetTriggerLocks: PerTargetTriggerLock[]
-  globalTriggerLocks: TriggerLockId[]
+  readonly skillExecutionId: SkillExecutionId
+  readonly actionId: ActionId | null
+  readonly casterId: UnitId
+  readonly skillId: SkillId
+  readonly branchId: SkillBranchId | null
+  readonly targetIds: readonly UnitId[]
+  readonly perTargetTriggerLocks: readonly PerTargetTriggerLock[]
+  readonly globalTriggerLocks: readonly TriggerLockId[]
 }
 
 export interface AttackContext {
-  attackId: AttackId
-  skillExecutionId: SkillExecutionId
-  attackerId: UnitId
-  targetId: UnitId
-  attackIndex: number
-  hit: boolean
+  readonly attackId: AttackId
+  readonly skillExecutionId: SkillExecutionId
+  readonly attackerId: UnitId
+  readonly targetId: UnitId
+  readonly attackIndex: number
+  readonly hit: boolean
 }
 
 export interface DamageEvent {
-  eventId: DamageEventId
-  attackId: AttackId | null
-  skillExecutionId: SkillExecutionId
-  sourceUnitId: UnitId
-  targetUnitId: UnitId
-  damageType: DamageType
-  rawValue: number
-  resolvedValue: number
+  readonly eventId: DamageEventId
+  readonly attackId: AttackId | null
+  readonly skillExecutionId: SkillExecutionId
+  readonly sourceUnitId: UnitId
+  readonly targetUnitId: UnitId
+  readonly damageType: DamageType
+  readonly rawValue: number
+  readonly resolvedValue: number
 }
 
 export interface BattleLogEvent {
-  eventId: BattleLogEventId
-  order: number
-  type: BattleLogEventType
-  message: string
-  unitIds: UnitId[]
-  skillExecutionId: SkillExecutionId | null
+  readonly eventId: BattleLogEventId
+  readonly order: number
+  readonly type: BattleLogEventType
+  readonly message: string
+  readonly unitIds: readonly UnitId[]
+  readonly skillExecutionId: SkillExecutionId | null
 }
 
 export interface BattleState {
-  phase: BattlePhase
-  units: UnitState[]
-  statusBatches: StatusBatch[]
-  turnSequence: TurnSequenceState
-  personalTurn: PersonalTurnState | null
-  activeAction: ActionContext | null
-  activeSkill: SkillContext | null
-  log: BattleLogEvent[]
+  readonly phase: BattlePhase
+  readonly units: readonly UnitState[]
+  readonly statusBatches: readonly StatusBatch[]
+  readonly turnSequence: TurnSequenceState | null
+  readonly personalTurn: PersonalTurnState | null
+  readonly activeAction: ActionContext | null
+  readonly activeSkill: SkillContext | null
+  readonly log: readonly BattleLogEvent[]
+  readonly events: readonly BattleEvent[]
 }
