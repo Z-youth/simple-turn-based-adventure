@@ -1,31 +1,53 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## 项目目标与当前阶段
 
-This repository is a React 19 single-page application built with TypeScript and Vite. Application code lives in `src/`: `main.tsx` mounts the app, `App.tsx` contains the current root component, and `index.css` and `App.css` provide global and component styles. Imported images belong in `src/assets/`; files that must be served unchanged belong in `public/`. Build and compiler configuration is kept at the repository root in `vite.config.ts` and the `tsconfig*.json` files.
+本项目是在浏览器中运行的原创回合制战斗测试版，目标是快速验证玩法，而不是制作正式商业游戏。当前验证重点包括战斗逻辑、行动顺序、技能交互、资源系统和战斗反馈。角色暂时使用文字、色块和简单图形表示，不制作正式美术。
 
-As the game grows, place reusable UI in `src/components/` and domain logic in focused folders such as `src/game/`, `src/models/`, or `src/hooks/`. Keep tests beside the code they cover or under `src/__tests__/` once testing is introduced.
+当前阶段禁止开始实现游戏。必须先等待测试版设计文档获得用户明确确认；在此之前，只能进行用户明确要求的准备、检查或文档工作。
 
-## Build, Test, and Development Commands
+## 固定技术栈
 
-- `npm install` installs the locked dependencies from `package-lock.json`.
-- `npm run dev` starts the Vite development server with hot module replacement.
-- `npm run build` type-checks the project and creates a production bundle in `dist/`.
-- `npm run lint` runs Oxlint against the codebase.
-- `npm run preview` serves the production build locally for final verification.
+使用项目现有的 React、TypeScript、Vite 和普通 CSS。未经用户明确同意，不得更换框架，也不得引入游戏引擎、后端、数据库或大型第三方库。优先使用浏览器原生能力和项目已有依赖。未经明确许可，不得修改依赖版本或 `package.json`。
 
-No automated test command or framework is currently configured. Do not claim test coverage until one is added.
+## 项目结构
 
-## Coding Style & Naming Conventions
+- `src/main.tsx`：应用入口。
+- `src/App.tsx`：当前根组件。
+- `src/index.css`、`src/App.css`：全局和组件样式。
+- `src/assets/`：由源码导入的资源。
+- `public/`：按原样提供的静态文件。
+- `vite.config.ts`、`tsconfig*.json`：构建和 TypeScript 配置。
 
-Follow the existing TypeScript and JSX style: two-space indentation, single quotes, no semicolons, and trailing commas in multiline structures. Use `PascalCase` for React components and component files, `camelCase` for functions, hooks, and variables, and `kebab-case` for public asset names. Prefix custom hooks with `use`. Keep components small and move non-visual turn or combat rules out of JSX.
+后续经用户批准开发时，可将可复用界面放入 `src/components/`，将战斗规则和状态处理放入 `src/game/` 等独立模块。
 
-Run `npm run lint` and `npm run build` before submitting changes. TypeScript is configured with unused-variable and unused-parameter checks.
+## 代码设计规则
 
-## Testing Guidelines
+战斗核心逻辑必须与 React UI 分离，并且不依赖 DOM，以便单独测试。角色、敌人和技能应尽量采用数据驱动配置，避免把规则散落在 JSX 中。优先选择简单、清晰、容易修改的实现，避免过度设计；不要为尚未确定的未来需求提前构建复杂系统。
 
-When adding a test framework, prefer colocated names such as `App.test.tsx` or `combat.test.ts`. Cover game-state transitions and edge cases with unit tests; use component tests for player interactions. Add the corresponding `npm test` script and document any coverage target in this file.
+沿用现有风格：两空格缩进、单引号、不写分号，多行结构保留尾随逗号。React 组件和组件文件使用 `PascalCase`，函数与变量使用 `camelCase`，自定义 Hook 以 `use` 开头。
 
-## Commit & Pull Request Guidelines
+## 开发与检查命令
 
-No Git history is available in this directory, so no repository-specific commit convention can be inferred. Use short, imperative subjects such as `Add turn order calculation`, and keep unrelated changes separate. Pull requests should explain behavior changes, list verification commands, link relevant issues, and include screenshots or recordings for visible UI changes.
+- `npm run dev`：启动 Vite 开发服务器。
+- `npm run lint`：运行 Oxlint。
+- `npm run build`：执行 TypeScript 检查并生成生产构建。
+- `npm run preview`：本地预览生产构建。
+
+项目当前未配置自动化测试框架或 `npm test`。新增测试体系必须先获得用户同意；核心战斗状态变化和边界情况应优先采用不依赖 DOM 的单元测试。
+
+## 工作方式
+
+每次只完成用户明确要求的一个小阶段。修改前先检查相关文件，并用简短中文说明方案。修改后运行适用的检查命令，至少包括 `npm run lint` 和 `npm run build`；若任务明确限制运行命令或检查不适用，应说明原因。最终汇报修改的文件、实现内容、检查结果及仍存在的问题。除非用户明确要求，否则不得自动执行 Git 提交。
+
+## 用户协作规则
+
+用户是编程初学者，解释应使用清晰、直接的中文。不得擅自改变用户已经确定的玩法设计。可以说明风险并提出建议，但最终决定权属于用户。遇到玩法定义不清时，不得自行发明关键规则，应先询问用户。
+
+## 安全边界
+
+未经明确许可，不得删除或大规模重命名现有文件，不得修改依赖版本或 `package.json`，也不得触碰当前项目目录以外的文件。所有操作必须限定在用户授权的任务范围内，并保留已有的无关改动。
+
+## Git 与提交要求
+
+提交信息应使用简短、明确的祈使句或 Conventional Commits 风格，例如 `feat: add turn order calculation`。提交前确认检查通过且工作区只包含本次任务的改动。除非用户明确要求，不创建提交、不切换分支，也不改写 Git 历史。
