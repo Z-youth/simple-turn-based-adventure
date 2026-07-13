@@ -281,11 +281,13 @@ function decrementStatusDurations(
   }
 }
 
-export type StatusRemovalMode = 'cleanse' | 'dispel'
-
-export interface RemoveStatusInput {
+export type RemoveStatusInput = {
   readonly ownerUnitId: UnitId
-  readonly mode: StatusRemovalMode
+  readonly mode: 'cleanse' | 'dispel'
+} | {
+  readonly ownerUnitId: UnitId
+  readonly mode: 'remove'
+  readonly category: StatusCategory
 }
 
 function isRemovable(batch: StatusBatch, input: RemoveStatusInput): boolean {
@@ -293,6 +295,7 @@ function isRemovable(batch: StatusBatch, input: RemoveStatusInput): boolean {
   if (input.mode === 'cleanse') {
     return batch.category === StatusCategory.Debuff && batch.canBeCleansed
   }
+  if (input.mode === 'remove') return batch.category === input.category
   return batch.category === StatusCategory.Buff && batch.canBeDispelled
 }
 
@@ -314,7 +317,9 @@ function removeOneStatusLayer(
   const nextStacks = removeWholeBatch ? 0 : target.stacks - 1
   const operationType = input.mode === 'cleanse'
     ? 'STATUS_CLEANSED'
-    : 'STATUS_DISPELLED'
+    : input.mode === 'dispel'
+      ? 'STATUS_DISPELLED'
+      : 'STATUS_REMOVED'
   if (nextStacks <= 0) {
     return {
       ok: true,

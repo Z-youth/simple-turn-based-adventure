@@ -299,6 +299,7 @@ export type StatusChangeKind =
   | 'STATUS_DURATION_DECREMENTED'
   | 'STATUS_CLEANSED'
   | 'STATUS_DISPELLED'
+  | 'STATUS_REMOVED'
 
 export interface StatusChangedEvent {
   readonly type: StatusChangeKind
