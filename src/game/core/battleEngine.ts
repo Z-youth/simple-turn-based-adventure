@@ -65,6 +65,10 @@ export interface BattleEngineExtensions {
     state: BattleState,
     action: ActionContext,
   ) => BattleTransitionResult
+  readonly applyUnitTurnEndEffects?: (
+    state: BattleState,
+    turn: PersonalTurnState,
+  ) => BattleTransitionResult
   readonly runAutomaticAction?: (
     state: BattleState,
   ) => BattleTransitionResult | null
@@ -405,17 +409,19 @@ function commitCurrentPersonalTurnEnd(
   state: BattleState,
   personalTurnId: PersonalTurnId,
   precedingEvents: readonly BattleEvent[] = [],
+  extensions?: BattleEngineExtensions,
+  rollbackState: BattleState = state,
 ): BattleTransitionResult {
   const turn = state.personalTurn
   const sequence = state.turnSequence
   if (turn === null || sequence === null) {
-    return failure(state, 'NO_ACTIVE_PERSONAL_TURN')
+    return failure(rollbackState, 'NO_ACTIVE_PERSONAL_TURN')
   }
   if (turn.personalTurnId !== personalTurnId) {
-    return failure(state, 'PERSONAL_TURN_ID_DOES_NOT_MATCH')
+    return failure(rollbackState, 'PERSONAL_TURN_ID_DOES_NOT_MATCH')
   }
   if (state.activeAction !== null) {
-    return failure(state, 'ACTION_STILL_RESOLVING')
+    return failure(rollbackState, 'ACTION_STILL_RESOLVING')
   }
 
   const unit = findUnit(state, turn.unitId)
@@ -425,17 +431,17 @@ function commitCurrentPersonalTurnEnd(
   let endingTurn = turn
   if (!actorIsAlive) {
     const ended = beginPersonalTurnEnd(endingTurn, false, state.units)
-    if (!ended.ok) return failure(state, ended.reason)
+    if (!ended.ok) return failure(rollbackState, ended.reason)
     endingTurn = ended.turn
     events.push(...ended.events)
   } else {
     if (endingTurn.phase === PersonalTurnPhase.AwaitingAction) {
       const beginning = beginPersonalTurnEnd(endingTurn, true, state.units)
-      if (!beginning.ok) return failure(state, beginning.reason)
+      if (!beginning.ok) return failure(rollbackState, beginning.reason)
       endingTurn = beginning.turn
       events.push(...beginning.events)
     } else if (endingTurn.phase !== PersonalTurnPhase.Ending) {
-      return failure(state, 'PERSONAL_TURN_NOT_READY_TO_END')
+      return failure(rollbackState, 'PERSONAL_TURN_NOT_READY_TO_END')
     }
     turnState = {
       ...turnState,
@@ -444,17 +450,44 @@ function commitCurrentPersonalTurnEnd(
     }
     while (endingTurn.phase !== PersonalTurnPhase.Ended) {
       const stageResult = advanceTurnEndStage(endingTurn, state.units)
-      if (!stageResult.ok) return failure(state, stageResult.reason)
+      if (!stageResult.ok) return failure(rollbackState, stageResult.reason)
       endingTurn = stageResult.turn
       turnState = { ...turnState, personalTurn: endingTurn }
       events.push(...stageResult.events)
+      if (endingTurn.phase === PersonalTurnPhase.EndingUnitSpecificEffects) {
+        const turnEndResult = extensions?.applyUnitTurnEndEffects?.(
+          turnState,
+          endingTurn,
+        )
+        if (turnEndResult !== undefined) {
+          if (!turnEndResult.ok) {
+            return failure(rollbackState, turnEndResult.reason)
+          }
+          const turnEndTurn = turnEndResult.state.personalTurn
+          if (
+            turnEndTurn === null
+            || turnEndTurn.personalTurnId !== endingTurn.personalTurnId
+            || turnEndTurn.phase
+              !== PersonalTurnPhase.EndingUnitSpecificEffects
+            || turnEndResult.state.activeAction !== null
+          ) return failure(rollbackState, 'UNIT_TURN_END_EFFECTS_INVALID_TURN')
+          turnState = {
+            ...turnEndResult.state,
+            events: turnState.events,
+          }
+          endingTurn = turnEndTurn
+          events.push(...turnEndResult.events)
+        }
+      }
       if (endingTurn.phase === PersonalTurnPhase.EndingSpecialVariables) {
         const pressureResult = clearMomentumPressure(
           turnState,
           turn.unitId,
           endingTurn,
         )
-        if (!pressureResult.ok) return failure(state, pressureResult.reason)
+        if (!pressureResult.ok) {
+          return failure(rollbackState, pressureResult.reason)
+        }
         turnState = pressureResult.state
         events.push(...pressureResult.events)
       }
@@ -463,7 +496,9 @@ function commitCurrentPersonalTurnEnd(
           turnState,
           turn.unitId,
         )
-        if (!durationResult.ok) return failure(state, durationResult.reason)
+        if (!durationResult.ok) {
+          return failure(rollbackState, durationResult.reason)
+        }
         turnState = {
           ...durationResult.state,
           events: turnState.events,
@@ -496,7 +531,12 @@ export function endCurrentPersonalTurn(
 ): BattleTransitionResult {
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)
-  const committed = commitCurrentPersonalTurnEnd(state, personalTurnId)
+  const committed = commitCurrentPersonalTurnEnd(
+    state,
+    personalTurnId,
+    [],
+    extensions,
+  )
   if (!committed.ok) return committed
   const continued = continueAfterCommittedTurn(committed.state, extensions)
   if (!continued.ok) return continued
@@ -629,13 +669,16 @@ export function completeCurrentBattleAction(
   const actor = findUnit(afterActionState, action.actorId)
   const actorIsAlive = actor !== undefined && isUnitAlive(actor)
   const shouldEndTurn = action.endsTurn || !actorIsAlive
-  const nextState: BattleState = {
+  const turnEndRollbackState: BattleState = {
     ...afterActionState,
+    actionRollbackState: null,
+  }
+  const nextState: BattleState = {
+    ...turnEndRollbackState,
     phase: shouldEndTurn ? BattlePhase.TurnEnd : BattlePhase.AwaitingAction,
     personalTurn: shouldEndTurn
       ? { ...finalTurn, phase: PersonalTurnPhase.Ending }
       : finalTurn,
-    actionRollbackState: null,
   }
   const actionEvents = [...result.events, ...afterActionEvents]
 
@@ -643,8 +686,11 @@ export function completeCurrentBattleAction(
     const ended = commitCurrentPersonalTurnEnd(
       nextState,
       completedTurn.personalTurnId,
+      [],
+      extensions,
+      turnEndRollbackState,
     )
-    if (!ended.ok) return failure(rollbackState, ended.reason)
+    if (!ended.ok) return ended
     return {
       ok: true,
       state: ended.state,
@@ -755,6 +801,7 @@ export function requestPlayerEndTurn(
     state,
     turn.personalTurnId,
     requestEvents,
+    extensions,
   )
   if (!committed.ok) {
     return {
