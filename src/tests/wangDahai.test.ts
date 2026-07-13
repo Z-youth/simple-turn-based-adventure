@@ -1,17 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import type {
   ActionId,
+  AttackId,
+  DamageEventId,
+  ResourceTransactionId,
+  SkillBranchId,
+  SkillExecutionId,
+  SkillId,
   StatusBatchId,
   StatusId,
 } from '../game/core/identifiers'
 import {
   completeBattleAction,
+  requestPlayerEndTurn,
   startBattleAction,
   startBattleSequence,
 } from '../game/core/battleEngine'
 import type { BattleEngineExtensions } from '../game/core/battleEngine'
 import type { BattleState } from '../game/core/contexts'
 import {
+  Camp,
   StackPolicy,
   StatusAcquisitionTiming,
   StatusCategory,
@@ -22,13 +30,23 @@ import { readSpecialCounter } from '../game/core/specialCounters'
 import type { StatusBatch } from '../game/core/statuses'
 import { getEffectiveAttack } from '../game/core/unitQueries'
 import type { UnitState } from '../game/core/units'
-import { GAME_CONTENT_BATTLE_EXTENSIONS } from '../game/content/battleExtensions'
+import {
+  combineBattleEngineExtensions,
+  GAME_CONTENT_BATTLE_EXTENSIONS,
+} from '../game/content/battleExtensions'
 import { createTrainingDummy, TRAINING_DUMMY_UNIT_ID } from '../game/content/bosses/trainingDummy'
 import {
   applyWangDahaiRisingMomentum,
   createWangDahai,
+  getWangDahaiStackingWaveUseCount,
   hasFreeMyriadRiversAtTurnEnd,
+  isWangDahaiActiveSkillAllowed,
+  useWangDahaiFirstSkill,
   WANG_DAHAI_BATTLE_EXTENSIONS,
+  WANG_DAHAI_FIRST_SKILL_ID,
+  WANG_DAHAI_NEW_TIDE_BRANCH_ID,
+  WANG_DAHAI_STACKING_WAVE_BRANCH_ID,
+  WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
   WANG_DAHAI_TIDE_COUNTER_ID,
   WANG_DAHAI_UNIT_ID,
 } from '../game/content/characters/wangDahai'
@@ -46,13 +64,47 @@ function setup(
   const initial = {
     ...createBattleState([
       wang({ speed: 200, ...wangOverrides }),
-      createUnit('other', { speed: 1 }),
+      createUnit('other', { camp: Camp.Enemy, speed: 1 }),
     ]),
     ...stateOverrides,
   }
   const started = startBattleSequence(initial, extensions)
   if (!started.ok) throw new Error(`Could not start Wang Dahai test: ${started.reason}`)
   return started.state
+}
+
+function firstSkillRequest(
+  name: string,
+  branchId: SkillBranchId,
+  targetUnitId = unitId('other'),
+) {
+  return {
+    branchId,
+    targetUnitId,
+    actionId: `action:${name}` as ActionId,
+    skillExecutionId: `skill-execution:${name}` as SkillExecutionId,
+    attackId: `attack:${name}` as AttackId,
+    damageEventId: `damage:${name}` as DamageEventId,
+    resourceTransactionId: `resource-transaction:${name}` as ResourceTransactionId,
+  }
+}
+
+function setupFirstSkill(
+  wangOverrides: Partial<UnitState> = {},
+  targetOverrides: Partial<UnitState> = {},
+  stateOverrides: Partial<BattleState> = {},
+): BattleState {
+  return setup(wangOverrides, {
+    ...stateOverrides,
+    units: [
+      wang({ speed: 200, ...wangOverrides }),
+      createUnit('other', {
+        camp: Camp.Enemy,
+        speed: 1,
+        ...targetOverrides,
+      }),
+    ],
+  })
 }
 
 function finishAction(
@@ -325,6 +377,365 @@ describe('Wang Dahai Rising Momentum passive', () => {
     expect(result.state.events).toBe(awaiting.events)
     expect(result.state.rngState).toBe(rng)
     expect(result.state.activeAction).toBeNull()
+  })
+})
+
+describe('Wang Dahai first skill branches', () => {
+  it('resolves New Tide resources and damage in order and ends the turn', () => {
+    const awaiting = setupFirstSkill()
+    const turnId = awaiting.personalTurn?.personalTurnId
+    const result = useWangDahaiFirstSkill(
+      awaiting,
+      firstSkillRequest('new-tide-values', WANG_DAHAI_NEW_TIDE_BRANCH_ID),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const wangUnit = result.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))
+    const target = result.state.units.find((unit) => unit.id === unitId('other'))
+    expect(wangUnit).toMatchObject({ energy: 4, momentum: 2 })
+    expect(target?.currentHealth).toBe(76)
+    expect(result.state.personalTurn?.personalTurnId).not.toBe(turnId)
+    expect(result.events.find((event) => event.type === 'ACTION_STARTED'))
+      .toMatchObject({ endsTurn: true })
+    expect(result.events.find((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+    ))).toMatchObject({
+      context: {
+        branchId: WANG_DAHAI_NEW_TIDE_BRANCH_ID,
+        targetIds: [unitId('other')],
+      },
+    })
+    const energyIndex = result.events.findIndex((event) => (
+      event.type === 'RESOURCE_GAINED'
+      && event.reason === 'wangDahaiNewTide'
+      && event.resourceType === ResourceType.Energy
+    ))
+    const momentumIndex = result.events.findIndex((event) => (
+      event.type === 'RESOURCE_GAINED'
+      && event.reason === 'wangDahaiNewTide'
+      && event.resourceType === ResourceType.Momentum
+    ))
+    const attackIndex = result.events.findIndex((event) => (
+      event.type === 'ATTACK_STARTED'
+    ))
+    expect(energyIndex).toBeLessThan(momentumIndex)
+    expect(momentumIndex).toBeLessThan(attackIndex)
+  })
+
+  it('resolves Stacking Wave at half attack, keeps the turn, and applies its lock', () => {
+    const awaiting = setupFirstSkill()
+    const turnId = awaiting.personalTurn?.personalTurnId
+    const result = useWangDahaiFirstSkill(
+      awaiting,
+      firstSkillRequest('stacking-values', WANG_DAHAI_STACKING_WAVE_BRANCH_ID),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const wangUnit = result.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))
+    const target = result.state.units.find((unit) => unit.id === unitId('other'))
+    expect(wangUnit).toMatchObject({ energy: 1, momentum: 3 })
+    expect(target?.currentHealth).toBe(88.5)
+    expect(result.state.personalTurn?.personalTurnId).toBe(turnId)
+    expect(result.state.personalTurn?.countedActionCount).toBe(1)
+    expect(result.events.find((event) => event.type === 'ACTION_STARTED'))
+      .toMatchObject({ endsTurn: false })
+    expect(result.events.findIndex((event) => event.type === 'ACTION_COMPLETED'))
+      .toBeLessThan(result.events.findIndex((event) => (
+        event.type === 'RESOURCE_GAINED'
+        && event.reason === 'wangDahaiStackingWave'
+      )))
+    expect(wangUnit && readSpecialCounter(
+      wangUnit,
+      WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
+    )).toBe(1)
+  })
+
+  it('uses the momentum snapshot from before Rising Momentum for New Tide', () => {
+    const awaiting = setupFirstSkill(
+      { momentum: 1 },
+      { momentum: 5, currentHealth: 200, maximumHealth: 200 },
+    )
+    const result = useWangDahaiFirstSkill(
+      awaiting,
+      firstSkillRequest('new-tide-snapshot', WANG_DAHAI_NEW_TIDE_BRANCH_ID),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.units.find((unit) => unit.id === unitId('other')))
+      .toMatchObject({ currentHealth: 175, momentum: 4 })
+    const damageIndex = result.events.findIndex((event) => (
+      event.type === 'DAMAGE_CALCULATED'
+    ))
+    const reductionIndex = result.events.findIndex((event) => (
+      event.type === 'RESOURCE_SPENT'
+      && event.unitId === unitId('other')
+      && event.reason === 'wangDahaiNewTide'
+    ))
+    expect(damageIndex).toBeLessThan(reductionIndex)
+
+    const highSnapshot = setupFirstSkill(
+      { momentum: 2 },
+      { momentum: 5, currentHealth: 200, maximumHealth: 200 },
+    )
+    const highResult = useWangDahaiFirstSkill(
+      highSnapshot,
+      firstSkillRequest('new-tide-high-snapshot', WANG_DAHAI_NEW_TIDE_BRANCH_ID),
+    )
+    expect(highResult.ok).toBe(true)
+    if (highResult.ok) {
+      expect(highResult.state.units.find((unit) => unit.id === unitId('other'))?.momentum)
+        .toBe(5)
+    }
+  })
+
+  it('grants 2, 4, 6, and 6 stacking momentum on consecutive uses', () => {
+    let state = setupFirstSkill(
+      { energy: 3 },
+      { currentHealth: 1000, maximumHealth: 1000 },
+    )
+    const gains: number[] = []
+    for (let use = 1; use <= 4; use += 1) {
+      const result = useWangDahaiFirstSkill(
+        state,
+        firstSkillRequest(`stacking-${use}`, WANG_DAHAI_STACKING_WAVE_BRANCH_ID),
+      )
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      gains.push(...result.events.flatMap((event) => (
+        event.type === 'RESOURCE_GAINED'
+        && event.reason === 'wangDahaiStackingWave'
+          ? [event.amount]
+          : []
+      )))
+      state = result.state
+    }
+
+    const wangUnit = state.units.find((unit) => unit.id === WANG_DAHAI_UNIT_ID)
+    expect(gains).toEqual([2, 4, 6, 6])
+    expect(wangUnit && getWangDahaiStackingWaveUseCount(wangUnit)).toBe(4)
+    expect(wangUnit).toMatchObject({ energy: 1, momentum: 22 })
+    expect(state.personalTurn?.countedActionCount).toBe(4)
+  })
+
+  it('locks other active skills after Stacking Wave and resets next turn', () => {
+    const first = useWangDahaiFirstSkill(
+      setupFirstSkill(),
+      firstSkillRequest('locking', WANG_DAHAI_STACKING_WAVE_BRANCH_ID),
+    )
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    const lockedUnit = first.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))
+    if (lockedUnit === undefined) return
+    expect(isWangDahaiActiveSkillAllowed(
+      lockedUnit,
+      'skill:other' as SkillId,
+    )).toBe(false)
+    expect(isWangDahaiActiveSkillAllowed(
+      lockedUnit,
+      WANG_DAHAI_FIRST_SKILL_ID,
+      WANG_DAHAI_NEW_TIDE_BRANCH_ID,
+    )).toBe(false)
+    expect(isWangDahaiActiveSkillAllowed(
+      lockedUnit,
+      WANG_DAHAI_FIRST_SKILL_ID,
+      WANG_DAHAI_STACKING_WAVE_BRANCH_ID,
+    )).toBe(true)
+    const blocked = useWangDahaiFirstSkill(
+      first.state,
+      firstSkillRequest('blocked-new-tide', WANG_DAHAI_NEW_TIDE_BRANCH_ID),
+    )
+    expect(blocked).toMatchObject({
+      ok: false,
+      state: first.state,
+      reason: 'WANG_DAHAI_ACTIVE_SKILL_LOCKED',
+    })
+
+    const ended = requestPlayerEndTurn(first.state, { hasLegalAction: false },
+      WANG_DAHAI_BATTLE_EXTENSIONS)
+    expect(ended.status).toBe('turnEnded')
+    if (ended.status !== 'turnEnded') return
+    const nextWangTurn = finishAction(
+      ended.state,
+      unitId('other'),
+      'target-ends-for-lock-reset',
+      true,
+    )
+    const resetUnit = nextWangTurn.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))
+    if (resetUnit === undefined) return
+    expect(getWangDahaiStackingWaveUseCount(resetUnit)).toBe(0)
+    expect(readSpecialCounter(
+      resetUnit,
+      WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
+    )).toBe(0)
+    expect(isWangDahaiActiveSkillAllowed(
+      resetUnit,
+      'skill:other' as SkillId,
+    )).toBe(true)
+  })
+})
+
+describe('Wang Dahai first skill rollback', () => {
+  it('rolls Rising Momentum back when Stacking Wave lacks energy', () => {
+    const awaiting = setupFirstSkill({ energy: 0, momentum: 10 })
+    const result = useWangDahaiFirstSkill(
+      awaiting,
+      firstSkillRequest('insufficient-energy', WANG_DAHAI_STACKING_WAVE_BRANCH_ID),
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: awaiting,
+      reason: 'INSUFFICIENT_RESOURCE',
+    })
+    expect(result.state.events).toBe(awaiting.events)
+    expect(result.state.rngState).toBe(awaiting.rngState)
+  })
+
+  it('rejects an invalid target without changing battle state', () => {
+    const awaiting = setupFirstSkill()
+    const result = useWangDahaiFirstSkill(
+      awaiting,
+      firstSkillRequest(
+        'invalid-target',
+        WANG_DAHAI_NEW_TIDE_BRANCH_ID,
+        unitId('missing'),
+      ),
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: awaiting,
+      reason: 'WANG_DAHAI_FIRST_SKILL_INVALID_TARGET',
+    })
+  })
+
+  it('rolls Rising Momentum and payment back when target validation fails', () => {
+    const awaiting = setupFirstSkill({}, { shield: Number.NaN })
+    const result = useWangDahaiFirstSkill(
+      awaiting,
+      firstSkillRequest('target-validation-failure', WANG_DAHAI_NEW_TIDE_BRANCH_ID),
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: awaiting,
+      reason: 'INVALID_UNIT_NUMERIC_STATE',
+    })
+    expect(result.state.units).toBe(awaiting.units)
+    expect(result.state.events).toBe(awaiting.events)
+  })
+
+  it('rolls the action back when damage validation fails', () => {
+    const awaiting = setupFirstSkill({
+      criticalRate: 1,
+      criticalDamage: Number.MAX_VALUE,
+    })
+    const result = useWangDahaiFirstSkill(
+      awaiting,
+      firstSkillRequest('damage-failure', WANG_DAHAI_NEW_TIDE_BRANCH_ID),
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: awaiting,
+      reason: 'INVALID_NUMERIC_INPUT',
+    })
+    expect(result.state.units).toBe(awaiting.units)
+  })
+
+  it('rolls payment, damage, RNG, and action back after a post-damage failure', () => {
+    const rng = createFixedSequenceRandomState([0.1])
+    const awaiting = setupFirstSkill(
+      { criticalRate: 0.5, momentum: 1 },
+      { currentHealth: 200, maximumHealth: 200, momentum: 0 },
+      { rngState: rng },
+    )
+    const result = useWangDahaiFirstSkill(
+      awaiting,
+      firstSkillRequest('rng-then-failure', WANG_DAHAI_NEW_TIDE_BRANCH_ID),
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: awaiting,
+      reason: 'INSUFFICIENT_RESOURCE',
+    })
+    expect(result.state.rngState).toBe(rng)
+    expect(result.state.rngState.cursor).toBe(0)
+    expect(result.state.units).toBe(awaiting.units)
+    expect(result.state.events).toBe(awaiting.events)
+    expect(result.state.activeAction).toBeNull()
+  })
+
+  it('rolls the stacking count, lock, resources, and action back when completion fails', () => {
+    const awaiting = setupFirstSkill()
+    const failingExtensions = combineBattleEngineExtensions(
+      WANG_DAHAI_BATTLE_EXTENSIONS,
+      {
+        applyAfterActionEffects(state) {
+          return {
+            ok: false,
+            state,
+            events: [],
+            reason: 'TEST_AFTER_ACTION_FAILURE',
+          }
+        },
+      },
+    )
+    const result = useWangDahaiFirstSkill(
+      awaiting,
+      firstSkillRequest('completion-failure', WANG_DAHAI_STACKING_WAVE_BRANCH_ID),
+      failingExtensions,
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: awaiting,
+      reason: 'TEST_AFTER_ACTION_FAILURE',
+    })
+    expect(result.state.units).toBe(awaiting.units)
+    expect(result.state.events).toBe(awaiting.events)
+    expect(result.state.rngState).toBe(awaiting.rngState)
+  })
+})
+
+describe('Wang Dahai first skill lethal and pressure behavior', () => {
+  it('keeps lethal state and triggers momentum pressure once per execution target', () => {
+    const request = firstSkillRequest(
+      'lethal-pressure',
+      WANG_DAHAI_NEW_TIDE_BRANCH_ID,
+    )
+    const result = useWangDahaiFirstSkill(
+      setupFirstSkill(
+        { momentum: 40 },
+        { currentHealth: 10, maximumHealth: 10, momentum: 5 },
+      ),
+      request,
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.units.find((unit) => unit.id === unitId('other')))
+      .toMatchObject({ alive: false, currentHealth: 0, momentum: 5 })
+    expect(result.events.filter((event) => (
+      event.type === 'MOMENTUM_PRESSURE_TRIGGERED'
+      && event.skillExecutionId === request.skillExecutionId
+      && event.targetUnitId === request.targetUnitId
+    ))).toHaveLength(1)
+    expect(result.events.filter((event) => (
+      event.type === 'UNIT_DIED' && event.unitId === request.targetUnitId
+    ))).toHaveLength(1)
   })
 })
 
