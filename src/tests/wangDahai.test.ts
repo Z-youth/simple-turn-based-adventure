@@ -26,10 +26,17 @@ import {
   StatusCategory,
 } from '../game/core/enums'
 import { createFixedSequenceRandomState } from '../game/core/rng'
-import { ResourceType, spendResource } from '../game/core/resources'
-import { readSpecialCounter } from '../game/core/specialCounters'
+import { gainResource, ResourceType, spendResource } from '../game/core/resources'
+import {
+  increaseSpecialCounter,
+  readSpecialCounter,
+} from '../game/core/specialCounters'
 import type { StatusBatch } from '../game/core/statuses'
-import { getEffectiveAttack } from '../game/core/unitQueries'
+import {
+  getEffectiveAttack,
+  getEffectiveCriticalDamage,
+  getEffectiveCriticalRate,
+} from '../game/core/unitQueries'
 import type { UnitState } from '../game/core/units'
 import {
   combineBattleEngineExtensions,
@@ -43,12 +50,14 @@ import {
   hasFreeMyriadRiversAtTurnEnd,
   isWangDahaiActiveSkillAllowed,
   useWangDahaiFirstSkill,
+  useWangDahaiThirdSkill,
   WANG_DAHAI_BATTLE_EXTENSIONS,
   WANG_DAHAI_FIRST_SKILL_ID,
   WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID,
   WANG_DAHAI_NEW_TIDE_BRANCH_ID,
   WANG_DAHAI_STACKING_WAVE_BRANCH_ID,
   WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
+  WANG_DAHAI_THIRD_SKILL_ID,
   WANG_DAHAI_TIDE_COUNTER_ID,
   WANG_DAHAI_UNIT_ID,
 } from '../game/content/characters/wangDahai'
@@ -87,6 +96,14 @@ function firstSkillRequest(
     skillExecutionId: `skill-execution:${name}` as SkillExecutionId,
     attackId: `attack:${name}` as AttackId,
     damageEventId: `damage:${name}` as DamageEventId,
+    resourceTransactionId: `resource-transaction:${name}` as ResourceTransactionId,
+  }
+}
+
+function thirdSkillRequest(name: string) {
+  return {
+    actionId: `action:${name}` as ActionId,
+    skillExecutionId: `skill-execution:${name}` as SkillExecutionId,
     resourceTransactionId: `resource-transaction:${name}` as ResourceTransactionId,
   }
 }
@@ -1001,6 +1018,523 @@ describe('Wang Dahai automatic Myriad Rivers', () => {
   })
 })
 
+describe('Wang Dahai Moonlit Tide', () => {
+  it('spends five energy, applies two-turn critical buffs, gains two Tide, and keeps the turn', () => {
+    const awaiting = setupFirstSkill({ energy: 3 })
+    const turnId = awaiting.personalTurn?.personalTurnId
+    const result = useWangDahaiThirdSkill(
+      awaiting,
+      thirdSkillRequest('moonlit-tide-values'),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const unit = result.state.units.find((candidate) => (
+      candidate.id === WANG_DAHAI_UNIT_ID
+    ))
+    expect(unit).toMatchObject({ energy: 0, momentum: 1 })
+    expect(unit && readSpecialCounter(unit, WANG_DAHAI_TIDE_COUNTER_ID)).toBe(2)
+    if (unit !== undefined) {
+      expect(getEffectiveCriticalRate(unit)).toBe(0.2)
+      expect(getEffectiveCriticalDamage(unit)).toBe(1)
+      expect(unit.temporaryAttributeModifiers.filter((modifier) => (
+        modifier.sourceId === WANG_DAHAI_THIRD_SKILL_ID
+      ))).toEqual([
+        expect.objectContaining({
+          attribute: 'criticalRate',
+          value: 0.2,
+          duration: { kind: 'ownerTurns', remainingTurns: 2 },
+        }),
+        expect.objectContaining({
+          attribute: 'criticalDamage',
+          value: 0.5,
+          duration: { kind: 'ownerTurns', remainingTurns: 2 },
+        }),
+      ])
+    }
+    expect(result.state.personalTurn?.personalTurnId).toBe(turnId)
+    expect(result.events.find((event) => event.type === 'ACTION_STARTED'))
+      .toMatchObject({ endsTurn: false })
+  })
+
+  it('counts duration only at Wang Dahai turn end and removes buffs after two owner turns', () => {
+    const used = useWangDahaiThirdSkill(
+      setupFirstSkill({ energy: 3 }),
+      thirdSkillRequest('moonlit-tide-duration'),
+    )
+    expect(used.ok).toBe(true)
+    if (!used.ok) return
+
+    const firstEnd = requestPlayerEndTurn(
+      used.state,
+      { hasLegalAction: false },
+      WANG_DAHAI_BATTLE_EXTENSIONS,
+    )
+    expect(firstEnd.status).toBe('turnEnded')
+    if (firstEnd.status !== 'turnEnded') return
+    const afterFirstEnd = firstEnd.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))
+    expect(afterFirstEnd && readSpecialCounter(
+      afterFirstEnd,
+      WANG_DAHAI_TIDE_COUNTER_ID,
+    )).toBe(1)
+    expect(afterFirstEnd?.temporaryAttributeModifiers.filter((modifier) => (
+      modifier.sourceId === WANG_DAHAI_THIRD_SKILL_ID
+    ))).toEqual([
+      expect.objectContaining({ duration: { kind: 'ownerTurns', remainingTurns: 1 } }),
+      expect.objectContaining({ duration: { kind: 'ownerTurns', remainingTurns: 1 } }),
+    ])
+
+    const nextWangTurn = finishAction(
+      firstEnd.state,
+      unitId('other'),
+      'moonlit-duration-other-end',
+      true,
+    )
+    const duringSecondTurn = nextWangTurn.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))
+    expect(duringSecondTurn?.temporaryAttributeModifiers.filter((modifier) => (
+      modifier.sourceId === WANG_DAHAI_THIRD_SKILL_ID
+    ))).toHaveLength(2)
+
+    const secondEnd = requestPlayerEndTurn(
+      nextWangTurn,
+      { hasLegalAction: false },
+      WANG_DAHAI_BATTLE_EXTENSIONS,
+    )
+    expect(secondEnd.status).toBe('turnEnded')
+    if (secondEnd.status !== 'turnEnded') return
+    const afterSecondEnd = secondEnd.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))
+    expect(afterSecondEnd && readSpecialCounter(
+      afterSecondEnd,
+      WANG_DAHAI_TIDE_COUNTER_ID,
+    )).toBe(0)
+    expect(afterSecondEnd?.temporaryAttributeModifiers.filter((modifier) => (
+      modifier.sourceId === WANG_DAHAI_THIRD_SKILL_ID
+    ))).toEqual([])
+  })
+
+  it('rolls payment, Rising Momentum, buffs, Tide, events, and RNG back on failure', () => {
+    const awaiting = setupFirstSkill({
+      energy: 3,
+      specialCounters: [{
+        counterId: WANG_DAHAI_TIDE_COUNTER_ID,
+        value: Number.MAX_SAFE_INTEGER,
+      }],
+    })
+    const result = useWangDahaiThirdSkill(
+      awaiting,
+      thirdSkillRequest('moonlit-tide-failure'),
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      state: awaiting,
+      reason: 'SPECIAL_COUNTER_VALUE_OUT_OF_RANGE',
+    })
+    expect(result.state.units).toBe(awaiting.units)
+    expect(result.state.events).toBe(awaiting.events)
+    expect(result.state.rngState).toBe(awaiting.rngState)
+    expect(result.state.activeAction).toBeNull()
+  })
+})
+
+describe('Wang Dahai Tide protection', () => {
+  it('protects skill and external momentum reductions while allowing gains', () => {
+    const used = useWangDahaiThirdSkill(
+      setupFirstSkill({ energy: 3 }),
+      thirdSkillRequest('tide-protection'),
+    )
+    expect(used.ok).toBe(true)
+    if (!used.ok || used.state.personalTurn === null) return
+    const turn = used.state.personalTurn
+    const skillSpend = spendResource(used.state, {
+      unitId: WANG_DAHAI_UNIT_ID,
+      resourceType: ResourceType.Momentum,
+      amount: 1,
+      reason: 'skillPayment',
+      sourceId: String(WANG_DAHAI_THIRD_SKILL_ID),
+      actionId: null,
+      personalTurnId: turn.personalTurnId,
+      sequenceId: turn.sequenceId,
+      skillExecutionId: null,
+      resourceTransactionId: null,
+    })
+    expect(skillSpend.ok).toBe(true)
+    if (!skillSpend.ok) return
+    const externalSpend = spendResource(skillSpend.state, {
+      unitId: WANG_DAHAI_UNIT_ID,
+      resourceType: ResourceType.Momentum,
+      amount: 1,
+      reason: 'externalReduction',
+      sourceId: null,
+      actionId: null,
+      personalTurnId: turn.personalTurnId,
+      sequenceId: turn.sequenceId,
+      skillExecutionId: null,
+      resourceTransactionId: null,
+    })
+    expect(externalSpend.ok).toBe(true)
+    if (!externalSpend.ok) return
+    const gained = gainResource(externalSpend.state, {
+      unitId: WANG_DAHAI_UNIT_ID,
+      resourceType: ResourceType.Momentum,
+      amount: 2,
+      reason: 'tideGainAllowed',
+      sourceId: null,
+      actionId: null,
+      personalTurnId: turn.personalTurnId,
+      sequenceId: turn.sequenceId,
+      skillExecutionId: null,
+      resourceTransactionId: null,
+    })
+    expect(gained.ok).toBe(true)
+    if (!gained.ok) return
+    expect(gained.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))?.momentum).toBe(3)
+    expect([
+      ...skillSpend.events,
+      ...externalSpend.events,
+    ].filter((event) => event.type === 'RESOURCE_REDUCTION_PREVENTED'))
+      .toHaveLength(2)
+  })
+
+  it('decreases one Tide each owner turn and restores momentum reduction at zero', () => {
+    const used = useWangDahaiThirdSkill(
+      setupFirstSkill({ energy: 3 }),
+      thirdSkillRequest('tide-expiration'),
+    )
+    expect(used.ok).toBe(true)
+    if (!used.ok) return
+    const firstEnd = requestPlayerEndTurn(
+      used.state,
+      { hasLegalAction: false },
+      WANG_DAHAI_BATTLE_EXTENSIONS,
+    )
+    expect(firstEnd.status).toBe('turnEnded')
+    if (firstEnd.status !== 'turnEnded') return
+    const nextWangTurn = finishAction(
+      firstEnd.state,
+      unitId('other'),
+      'tide-expiration-other-end',
+      true,
+    )
+    const protectedSpend = spendResource(nextWangTurn, {
+      unitId: WANG_DAHAI_UNIT_ID,
+      resourceType: ResourceType.Momentum,
+      amount: 1,
+      reason: 'stillProtected',
+      sourceId: null,
+      actionId: null,
+      personalTurnId: nextWangTurn.personalTurn?.personalTurnId ?? null,
+      sequenceId: nextWangTurn.personalTurn?.sequenceId ?? null,
+      skillExecutionId: null,
+      resourceTransactionId: null,
+    })
+    expect(protectedSpend.ok).toBe(true)
+    if (!protectedSpend.ok) return
+    expect(protectedSpend.events).toEqual([
+      expect.objectContaining({ type: 'RESOURCE_REDUCTION_PREVENTED' }),
+    ])
+    const secondEnd = requestPlayerEndTurn(
+      protectedSpend.state,
+      { hasLegalAction: false },
+      WANG_DAHAI_BATTLE_EXTENSIONS,
+    )
+    expect(secondEnd.status).toBe('turnEnded')
+    if (secondEnd.status !== 'turnEnded') return
+    const unit = secondEnd.state.units.find((candidate) => (
+      candidate.id === WANG_DAHAI_UNIT_ID
+    ))
+    expect(unit && readSpecialCounter(unit, WANG_DAHAI_TIDE_COUNTER_ID)).toBe(0)
+    const allowedSpend = spendResource(secondEnd.state, {
+      unitId: WANG_DAHAI_UNIT_ID,
+      resourceType: ResourceType.Momentum,
+      amount: 1,
+      reason: 'protectionExpired',
+      sourceId: null,
+      actionId: null,
+      personalTurnId: secondEnd.state.personalTurn?.personalTurnId ?? null,
+      sequenceId: secondEnd.state.personalTurn?.sequenceId ?? null,
+      skillExecutionId: null,
+      resourceTransactionId: null,
+    })
+    expect(allowedSpend.ok).toBe(true)
+    if (allowedSpend.ok) {
+      expect(allowedSpend.events).toEqual([
+        expect.objectContaining({ type: 'RESOURCE_SPENT', amount: 1 }),
+      ])
+    }
+  })
+})
+
+describe('Wang Dahai free turn-end Myriad Rivers', () => {
+  it('triggers once from the fixed marker and does not reduce momentum', () => {
+    const awaiting = setupMyriadRivers({ momentum: 10 })
+    const ended = requestPlayerEndTurn(
+      awaiting,
+      { hasLegalAction: false },
+      WANG_DAHAI_BATTLE_EXTENSIONS,
+    )
+
+    expect(ended.status).toBe('turnEnded')
+    if (ended.status !== 'turnEnded') return
+    expect(ended.events.filter((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+      && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+      && event.actionId === null
+    ))).toHaveLength(1)
+    expect(ended.events.filter((event) => (
+      event.type === 'RESOURCE_SPENT'
+      && event.reason === 'wangDahaiMyriadRivers'
+    ))).toHaveLength(0)
+    expect(ended.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))?.momentum).toBe(10)
+    expect(ended.state.units.find((unit) => unit.id === unitId('other')))
+      .toMatchObject({ currentHealth: 70 })
+  })
+
+  it('orders ordinary Myriad Rivers, free Myriad Rivers, Tide loss, and common turn end', () => {
+    const used = useWangDahaiThirdSkill(
+      setupMyriadRivers(
+        { momentum: 10, energy: 5 },
+        [createUnit('other', {
+          camp: Camp.Enemy,
+          speed: 1,
+          currentHealth: 1000,
+          maximumHealth: 1000,
+        })],
+      ),
+      thirdSkillRequest('ordinary-then-free'),
+    )
+    expect(used.ok).toBe(true)
+    if (!used.ok) return
+    const ended = requestPlayerEndTurn(
+      used.state,
+      { hasLegalAction: false },
+      WANG_DAHAI_BATTLE_EXTENSIONS,
+    )
+    expect(ended.status).toBe('turnEnded')
+    if (ended.status !== 'turnEnded') return
+    const events = ended.state.events
+    const ordinaryIndex = events.findIndex((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+      && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+      && event.actionId !== null
+    ))
+    const freeIndex = events.findIndex((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+      && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+      && event.actionId === null
+    ))
+    const tideLossIndex = events.findIndex((event) => (
+      event.type === 'SPECIAL_COUNTER_CHANGED'
+      && event.counterId === WANG_DAHAI_TIDE_COUNTER_ID
+      && event.operation === 'decrease'
+    ))
+    const commonModifierIndex = events.findIndex((event) => (
+      event.type === 'TEMPORARY_ATTRIBUTE_CHANGED'
+      && event.operation === 'durationDecremented'
+    ))
+    expect(ordinaryIndex).toBeLessThan(freeIndex)
+    expect(freeIndex).toBeLessThan(tideLossIndex)
+    expect(tideLossIndex).toBeLessThan(commonModifierIndex)
+    const unit = ended.state.units.find((candidate) => (
+      candidate.id === WANG_DAHAI_UNIT_ID
+    ))
+    expect(unit?.momentum).toBe(11)
+    expect(unit && readSpecialCounter(unit, WANG_DAHAI_TIDE_COUNTER_ID)).toBe(1)
+  })
+
+  it('skips without a living enemy and still completes Tide and turn-end processing', () => {
+    const awaiting = setupMyriadRivers({
+      momentum: 10,
+      specialCounters: [{ counterId: WANG_DAHAI_TIDE_COUNTER_ID, value: 1 }],
+    })
+    const noEnemies: BattleState = {
+      ...awaiting,
+      units: awaiting.units.map((unit) => unit.id === unitId('other')
+        ? { ...unit, currentHealth: 0, alive: false }
+        : unit),
+    }
+    const ended = requestPlayerEndTurn(
+      noEnemies,
+      { hasLegalAction: false },
+      WANG_DAHAI_BATTLE_EXTENSIONS,
+    )
+
+    expect(ended.status).toBe('turnEnded')
+    if (ended.status !== 'turnEnded') return
+    expect(ended.events.some((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+      && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+      && event.actionId === null
+    ))).toBe(false)
+    const unit = ended.state.units.find((candidate) => (
+      candidate.id === WANG_DAHAI_UNIT_ID
+    ))
+    expect(unit && readSpecialCounter(unit, WANG_DAHAI_TIDE_COUNTER_ID)).toBe(0)
+  })
+
+  it('rolls free damage and RNG back without undoing an already committed action', () => {
+    const rng = createFixedSequenceRandomState([])
+    const marked = setupMyriadRivers(
+      { momentum: 10, criticalRate: 0.5 },
+      undefined,
+      { rngState: rng },
+    )
+    const reduced = spendResource(marked, {
+      unitId: WANG_DAHAI_UNIT_ID,
+      resourceType: ResourceType.Momentum,
+      amount: 10,
+      reason: 'avoidOrdinaryMyriad',
+      sourceId: null,
+      actionId: null,
+      personalTurnId: marked.personalTurn?.personalTurnId ?? null,
+      sequenceId: marked.personalTurn?.sequenceId ?? null,
+      skillExecutionId: null,
+      resourceTransactionId: null,
+    })
+    expect(reduced.ok).toBe(true)
+    if (!reduced.ok) return
+    const committed = completePlainWangAction(reduced.state, 'free-rng-committed')
+    expect(committed.ok).toBe(true)
+    if (!committed.ok) return
+    const ended = requestPlayerEndTurn(
+      committed.state,
+      { hasLegalAction: false },
+      WANG_DAHAI_BATTLE_EXTENSIONS,
+    )
+
+    expect(ended).toMatchObject({
+      status: 'invalid',
+      state: committed.state,
+      reason: 'RANDOM_SOURCE_EXHAUSTED',
+    })
+    expect(ended.state.personalTurn?.completedActionIds).toEqual([
+      'action:free-rng-committed',
+    ])
+    expect(ended.state.units).toBe(committed.state.units)
+    expect(ended.state.events).toBe(committed.state.events)
+    expect(ended.state.rngState).toBe(rng)
+  })
+
+  it('rolls free damage calculation failure back to the committed action', () => {
+    const marked = setupMyriadRivers({
+      momentum: 10,
+      criticalRate: 1,
+      criticalDamage: Number.MAX_VALUE,
+    })
+    const reduced = spendResource(marked, {
+      unitId: WANG_DAHAI_UNIT_ID,
+      resourceType: ResourceType.Momentum,
+      amount: 10,
+      reason: 'avoidOrdinaryMyriadForDamageFailure',
+      sourceId: null,
+      actionId: null,
+      personalTurnId: marked.personalTurn?.personalTurnId ?? null,
+      sequenceId: marked.personalTurn?.sequenceId ?? null,
+      skillExecutionId: null,
+      resourceTransactionId: null,
+    })
+    expect(reduced.ok).toBe(true)
+    if (!reduced.ok) return
+    const committed = completePlainWangAction(
+      reduced.state,
+      'free-damage-committed',
+    )
+    expect(committed.ok).toBe(true)
+    if (!committed.ok) return
+    const ended = requestPlayerEndTurn(
+      committed.state,
+      { hasLegalAction: false },
+      WANG_DAHAI_BATTLE_EXTENSIONS,
+    )
+
+    expect(ended).toMatchObject({
+      status: 'invalid',
+      state: committed.state,
+      reason: 'INVALID_NUMERIC_INPUT',
+    })
+    expect(ended.state.units).toBe(committed.state.units)
+    expect(ended.state.events).toBe(committed.state.events)
+    expect(ended.state.personalTurn?.completedActionIds).toEqual([
+      'action:free-damage-committed',
+    ])
+  })
+
+  it('rolls the whole turn-end hook back when a later unit effect fails', () => {
+    const marked = setupMyriadRivers({ momentum: 10 })
+    const reduced = spendResource(marked, {
+      unitId: WANG_DAHAI_UNIT_ID,
+      resourceType: ResourceType.Momentum,
+      amount: 10,
+      reason: 'prepareTurnEndRollback',
+      sourceId: null,
+      actionId: null,
+      personalTurnId: marked.personalTurn?.personalTurnId ?? null,
+      sequenceId: marked.personalTurn?.sequenceId ?? null,
+      skillExecutionId: null,
+      resourceTransactionId: null,
+    })
+    expect(reduced.ok).toBe(true)
+    if (!reduced.ok || reduced.state.personalTurn === null) return
+    const tide = increaseSpecialCounter(reduced.state, {
+      unitId: WANG_DAHAI_UNIT_ID,
+      counterId: WANG_DAHAI_TIDE_COUNTER_ID,
+      amount: 1,
+      actionId: null,
+      personalTurnId: reduced.state.personalTurn.personalTurnId,
+      sequenceId: reduced.state.personalTurn.sequenceId,
+      skillExecutionId: null,
+    })
+    expect(tide.ok).toBe(true)
+    if (!tide.ok) return
+    const committed = completePlainWangAction(tide.state, 'turn-end-hook-committed')
+    expect(committed.ok).toBe(true)
+    if (!committed.ok) return
+    const failingExtensions = combineBattleEngineExtensions(
+      WANG_DAHAI_BATTLE_EXTENSIONS,
+      {
+        applyUnitTurnEndEffects(state) {
+          return {
+            ok: false,
+            state,
+            events: [],
+            reason: 'TEST_LATE_TURN_END_FAILURE',
+          }
+        },
+      },
+    )
+    const ended = requestPlayerEndTurn(
+      committed.state,
+      { hasLegalAction: false },
+      failingExtensions,
+    )
+
+    expect(ended).toMatchObject({
+      status: 'invalid',
+      state: committed.state,
+      reason: 'TEST_LATE_TURN_END_FAILURE',
+    })
+    const unit = ended.state.units.find((candidate) => (
+      candidate.id === WANG_DAHAI_UNIT_ID
+    ))
+    expect(unit && readSpecialCounter(unit, WANG_DAHAI_TIDE_COUNTER_ID)).toBe(1)
+    expect(ended.state.units.find((candidate) => candidate.id === unitId('other')))
+      .toMatchObject({ currentHealth: 100 })
+    expect(ended.state.personalTurn?.completedActionIds).toEqual([
+      'action:turn-end-hook-committed',
+    ])
+  })
+})
+
 describe('content extension composition', () => {
   it('keeps Wang Dahai and training dummy extensions working together', () => {
     const started = startBattleSequence(createBattleState([
@@ -1024,6 +1558,43 @@ describe('content extension composition', () => {
     const dummyUnit = completed.units.find((unit) => unit.id === TRAINING_DUMMY_UNIT_ID)
     expect(completed.personalTurn?.unitId).toBe(WANG_DAHAI_UNIT_ID)
     expect(wangUnit).toMatchObject({ energy: 4, currentHealth: 150 })
+    expect(dummyUnit).toMatchObject({ shield: 20, momentum: 5 })
+  })
+
+  it('keeps Moonlit Tide, Wang turn end, and training dummy automation composed', () => {
+    const started = startBattleSequence(createBattleState([
+      wang({ speed: 100, energy: 3 }),
+      createTrainingDummy(),
+    ]), GAME_CONTENT_BATTLE_EXTENSIONS)
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    const used = useWangDahaiThirdSkill(
+      started.state,
+      thirdSkillRequest('combined-moonlit-tide'),
+      GAME_CONTENT_BATTLE_EXTENSIONS,
+    )
+    expect(used.ok).toBe(true)
+    if (!used.ok) return
+    const ended = requestPlayerEndTurn(
+      used.state,
+      { hasLegalAction: false },
+      GAME_CONTENT_BATTLE_EXTENSIONS,
+    )
+    expect(ended.status).toBe('turnEnded')
+    if (ended.status !== 'turnEnded') return
+
+    const wangUnit = ended.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))
+    const dummyUnit = ended.state.units.find((unit) => (
+      unit.id === TRAINING_DUMMY_UNIT_ID
+    ))
+    expect(ended.state.personalTurn?.unitId).toBe(WANG_DAHAI_UNIT_ID)
+    expect(wangUnit && readSpecialCounter(
+      wangUnit,
+      WANG_DAHAI_TIDE_COUNTER_ID,
+    )).toBe(1)
+    expect(wangUnit).toMatchObject({ energy: 2, currentHealth: 150 })
     expect(dummyUnit).toMatchObject({ shield: 20, momentum: 5 })
   })
 })

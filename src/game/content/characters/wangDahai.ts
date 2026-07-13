@@ -35,7 +35,10 @@ import type {
   UnitId,
 } from '../../core/identifiers'
 import { resolveResourcePaidSkillTransaction } from '../../core/resourceTransaction'
-import { resolveTriggeredSkillTransaction } from '../../core/resolutionTransaction'
+import {
+  resolveTriggeredSkillTransaction,
+  resolveTurnEndTriggeredSkillTransaction,
+} from '../../core/resolutionTransaction'
 import { removeBattleStatus } from '../../core/statusEngine'
 import {
   decreaseSpecialCounter,
@@ -72,6 +75,8 @@ export const WANG_DAHAI_FIRST_SKILL_ID =
   'skill:wang-dahai:first' as SkillId
 export const WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID =
   'skill:wang-dahai:myriad-rivers' as SkillId
+export const WANG_DAHAI_THIRD_SKILL_ID =
+  'skill:wang-dahai:moonlit-tide' as SkillId
 export const WANG_DAHAI_NEW_TIDE_BRANCH_ID =
   'skill-branch:wang-dahai:new-tide' as SkillBranchId
 export const WANG_DAHAI_STACKING_WAVE_BRANCH_ID =
@@ -88,6 +93,11 @@ const STACKING_WAVE_ENERGY_COST = 1
 const STACKING_WAVE_MAX_MOMENTUM_GAIN = 6
 const MYRIAD_RIVERS_MOMENTUM_THRESHOLD = 10
 const MYRIAD_RIVERS_MOMENTUM_REDUCTION = 10
+const MOONLIT_TIDE_ENERGY_COST = 5
+const MOONLIT_TIDE_CRITICAL_RATE_GAIN = 0.2
+const MOONLIT_TIDE_CRITICAL_DAMAGE_GAIN = 0.5
+const MOONLIT_TIDE_DURATION_TURNS = 2
+const MOONLIT_TIDE_TIDE_GAIN = 2
 
 export interface WangDahaiFirstSkillRequest {
   readonly branchId: SkillBranchId
@@ -96,6 +106,12 @@ export interface WangDahaiFirstSkillRequest {
   readonly skillExecutionId: SkillExecutionId
   readonly attackId: AttackId
   readonly damageEventId: DamageEventId
+  readonly resourceTransactionId: ResourceTransactionId
+}
+
+export interface WangDahaiThirdSkillRequest {
+  readonly actionId: ActionId
+  readonly skillExecutionId: SkillExecutionId
   readonly resourceTransactionId: ResourceTransactionId
 }
 
@@ -194,7 +210,11 @@ export function createWangDahai(): UnitState {
     magic: 0,
     momentumPressure: 0,
     specialCounters: [],
-    resourceReductionProtections: [],
+    resourceReductionProtections: [{
+      resourceType: ResourceType.Momentum,
+      counterId: WANG_DAHAI_TIDE_COUNTER_ID,
+      minimumCounterValue: 1,
+    }],
     alive: true,
   }
 }
@@ -483,6 +503,27 @@ function myriadRiversExecutionPrefix(action: ActionContext): string {
   return `${action.personalTurnId}:${action.actionId}:wang-dahai:myriad-rivers`
 }
 
+function createMyriadRiversAttack(
+  unit: UnitState,
+  enemies: readonly UnitState[],
+  prefix: string,
+): NormalAttackRequest {
+  return {
+    attackId: `${prefix}:attack` as AttackId,
+    damageType: DamageType.Normal,
+    effectiveAttack: getEffectiveAttack(unit),
+    multiplier: 1,
+    fixedDamage: 0,
+    criticalRate: getEffectiveCriticalRate(unit),
+    criticalDamage: getEffectiveCriticalDamage(unit),
+    normalDamageIncrease: unit.normalDamageIncrease,
+    targets: enemies.map((target) => ({
+      targetId: target.id,
+      damageEventId: `${prefix}:damage:${target.id}` as DamageEventId,
+    })),
+  }
+}
+
 export function applyAutomaticWangDahaiMyriadRivers(
   state: BattleState,
   action: ActionContext,
@@ -511,21 +552,7 @@ export function applyAutomaticWangDahaiMyriadRivers(
   if (state.resolutionIds.skillExecutionIds.includes(skillExecutionId)) {
     return { ok: true, state, events: [] }
   }
-  const attackId = `${prefix}:attack` as AttackId
-  const attack: NormalAttackRequest = {
-    attackId,
-    damageType: DamageType.Normal,
-    effectiveAttack: getEffectiveAttack(unit),
-    multiplier: 1,
-    fixedDamage: 0,
-    criticalRate: getEffectiveCriticalRate(unit),
-    criticalDamage: getEffectiveCriticalDamage(unit),
-    normalDamageIncrease: unit.normalDamageIncrease,
-    targets: enemies.map((target) => ({
-      targetId: target.id,
-      damageEventId: `${prefix}:damage:${target.id}` as DamageEventId,
-    })),
-  }
+  const attack = createMyriadRiversAttack(unit, enemies, prefix)
   const resolved = resolveTriggeredSkillTransaction(state, {
     skillExecutionId,
     skillId: WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID,
@@ -548,6 +575,81 @@ export function applyAutomaticWangDahaiMyriadRivers(
   })
   if (!resolved.ok) return failure(state, resolved.reason)
   return resolved
+}
+
+export function applyFreeWangDahaiMyriadRivers(
+  state: BattleState,
+  turn: PersonalTurnState,
+): WangDahaiEffectResult {
+  const unit = findWangDahai(state)
+  if (
+    state.phase !== BattlePhase.TurnEnd
+    || turn.unitId !== WANG_DAHAI_UNIT_ID
+    || turn.phase !== PersonalTurnPhase.EndingUnitSpecificEffects
+    || unit === null
+  ) return failure(state, 'WANG_DAHAI_NOT_READY_FOR_FREE_MYRIAD_RIVERS')
+  if (!hasFreeMyriadRiversAtTurnEnd(unit)) {
+    return { ok: true, state, events: [] }
+  }
+
+  const enemies = state.units.filter((candidate) => (
+    candidate.camp !== unit.camp && isUnitAlive(candidate)
+  ))
+  if (enemies.length === 0) return { ok: true, state, events: [] }
+
+  const prefix = `${turn.personalTurnId}:wang-dahai:myriad-rivers:free`
+  const skillExecutionId = `${prefix}:skill-execution` as SkillExecutionId
+  if (state.resolutionIds.skillExecutionIds.includes(skillExecutionId)) {
+    return { ok: true, state, events: [] }
+  }
+  const attack = createMyriadRiversAttack(unit, enemies, prefix)
+  const resolved = resolveTurnEndTriggeredSkillTransaction(state, {
+    skillExecutionId,
+    skillId: WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID,
+    actionId: null,
+    personalTurnId: turn.personalTurnId,
+    sequenceId: turn.sequenceId,
+    casterId: unit.id,
+    attacks: [attack],
+    effects: [{ kind: 'attack', attack }],
+  })
+  if (!resolved.ok) return failure(state, resolved.reason)
+  return resolved
+}
+
+export function applyWangDahaiTurnEndEffects(
+  state: BattleState,
+  turn: PersonalTurnState,
+): WangDahaiEffectResult {
+  if (
+    turn.unitId !== WANG_DAHAI_UNIT_ID
+    || turn.phase !== PersonalTurnPhase.EndingUnitSpecificEffects
+  ) return { ok: true, state, events: [] }
+
+  const freeMyriadRivers = applyFreeWangDahaiMyriadRivers(state, turn)
+  if (!freeMyriadRivers.ok) return failure(state, freeMyriadRivers.reason)
+  const unit = freeMyriadRivers.state.units.find((candidate) => (
+    candidate.id === WANG_DAHAI_UNIT_ID
+  ))
+  if (unit === undefined) return failure(state, 'WANG_DAHAI_NOT_FOUND')
+  const tide = readSpecialCounter(unit, WANG_DAHAI_TIDE_COUNTER_ID)
+  if (tide === 0) return freeMyriadRivers
+
+  const decreased = decreaseSpecialCounter(freeMyriadRivers.state, {
+    unitId: unit.id,
+    counterId: WANG_DAHAI_TIDE_COUNTER_ID,
+    amount: 1,
+    actionId: null,
+    personalTurnId: turn.personalTurnId,
+    sequenceId: turn.sequenceId,
+    skillExecutionId: null,
+  })
+  if (!decreased.ok) return failure(state, decreased.reason)
+  return {
+    ok: true,
+    state: decreased.state,
+    events: [...freeMyriadRivers.events, ...decreased.events],
+  }
 }
 
 export function applyWangDahaiAfterActionEffects(
@@ -733,7 +835,110 @@ export function useWangDahaiFirstSkill(
     request.actionId,
     extensions,
   )
-  if (!completed.ok) return failure(state, completed.reason)
+  if (!completed.ok) return failure(completed.state, completed.reason)
+  return {
+    ok: true,
+    state: completed.state,
+    events: completed.state.events.slice(state.events.length),
+  }
+}
+
+export function useWangDahaiThirdSkill(
+  state: BattleState,
+  request: WangDahaiThirdSkillRequest,
+  extensions: BattleEngineExtensions = WANG_DAHAI_BATTLE_EXTENSIONS,
+): WangDahaiEffectResult {
+  const turn = state.personalTurn
+  const unit = findWangDahai(state)
+  if (
+    state.phase !== BattlePhase.AwaitingAction
+    || turn === null
+    || turn.phase !== PersonalTurnPhase.AwaitingAction
+    || turn.unitId !== WANG_DAHAI_UNIT_ID
+    || unit === null
+  ) return failure(state, 'WANG_DAHAI_NOT_READY_FOR_THIRD_SKILL')
+  if (!isWangDahaiActiveSkillAllowed(unit, WANG_DAHAI_THIRD_SKILL_ID)) {
+    return failure(state, 'WANG_DAHAI_ACTIVE_SKILL_LOCKED')
+  }
+
+  const started = startBattleAction(state, {
+    actionId: request.actionId,
+    actorId: unit.id,
+    skillExecutionId: request.skillExecutionId,
+    countsAsAction: true,
+    endsTurn: false,
+  })
+  if (!started.ok) return failure(state, started.reason)
+  const rising = applyWangDahaiRisingMomentum(started.state)
+  if (!rising.ok) return failure(state, rising.reason)
+  const currentAction = rising.state.activeAction
+  const currentTurn = rising.state.personalTurn
+  if (currentAction === null || currentTurn === null) {
+    return failure(state, 'WANG_DAHAI_THIRD_SKILL_CONTEXT_MISSING')
+  }
+
+  const resolved = resolveResourcePaidSkillTransaction(
+    rising.state,
+    {
+      resourceTransactionId: request.resourceTransactionId,
+      actionId: request.actionId,
+      personalTurnId: currentTurn.personalTurnId,
+      sequenceId: currentAction.sequenceId,
+      skillExecutionId: request.skillExecutionId,
+      payerUnitId: unit.id,
+      costs: [{
+        resourceType: ResourceType.Energy,
+        amount: MOONLIT_TIDE_ENERGY_COST,
+      }],
+    },
+    {
+      skillExecutionId: request.skillExecutionId,
+      skillId: WANG_DAHAI_THIRD_SKILL_ID,
+      actionId: request.actionId,
+      personalTurnId: currentTurn.personalTurnId,
+      sequenceId: currentAction.sequenceId,
+      casterId: unit.id,
+      attacks: [],
+      effects: [
+        {
+          kind: 'temporaryAttribute',
+          attribute: TemporaryAttribute.CriticalRate,
+          unitId: unit.id,
+          sourceId: WANG_DAHAI_THIRD_SKILL_ID,
+          value: MOONLIT_TIDE_CRITICAL_RATE_GAIN,
+          duration: {
+            kind: 'ownerTurns',
+            turns: MOONLIT_TIDE_DURATION_TURNS,
+          },
+        },
+        {
+          kind: 'temporaryAttribute',
+          attribute: TemporaryAttribute.CriticalDamage,
+          unitId: unit.id,
+          sourceId: WANG_DAHAI_THIRD_SKILL_ID,
+          value: MOONLIT_TIDE_CRITICAL_DAMAGE_GAIN,
+          duration: {
+            kind: 'ownerTurns',
+            turns: MOONLIT_TIDE_DURATION_TURNS,
+          },
+        },
+        {
+          kind: 'specialCounter',
+          operation: 'increase',
+          unitId: unit.id,
+          counterId: WANG_DAHAI_TIDE_COUNTER_ID,
+          amount: MOONLIT_TIDE_TIDE_GAIN,
+        },
+      ],
+    },
+  )
+  if (!resolved.ok) return failure(state, resolved.reason)
+  const completed = completeBattleAction(
+    resolved.state,
+    request.actionId,
+    extensions,
+  )
+  if (!completed.ok) return failure(completed.state, completed.reason)
   return {
     ok: true,
     state: completed.state,
@@ -750,5 +955,8 @@ export const WANG_DAHAI_BATTLE_EXTENSIONS: BattleEngineExtensions = {
   },
   applyAfterActionEffects(state, action) {
     return applyWangDahaiAfterActionEffects(state, action)
+  },
+  applyUnitTurnEndEffects(state, turn) {
+    return applyWangDahaiTurnEndEffects(state, turn)
   },
 }

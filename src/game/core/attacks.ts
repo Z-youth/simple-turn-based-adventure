@@ -122,6 +122,13 @@ export interface SkillResolutionRequest {
   readonly effects?: readonly SkillEffectRequest[]
 }
 
+export type TriggeredSkillResolutionRequest = Omit<
+  SkillResolutionRequest,
+  'actionId'
+> & {
+  readonly actionId: ActionId | null
+}
+
 export function isSupportedAttackDamageType(
   damageType: DamageType,
 ): damageType is AttackRequest['damageType'] {

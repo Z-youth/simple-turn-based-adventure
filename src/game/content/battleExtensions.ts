@@ -57,6 +57,34 @@ function runAfterActionExtensions(
   return { ok: true, state: currentState, events }
 }
 
+function runTurnEndExtensions(
+  extensions: readonly BattleEngineExtensions[],
+  state: BattleState,
+  turn: PersonalTurnState,
+): BattleTransitionResult {
+  let currentState = state
+  const events: BattleEvent[] = []
+  for (const extension of extensions) {
+    const apply = extension.applyUnitTurnEndEffects
+    if (apply === undefined) continue
+    const currentTurn = currentState.personalTurn
+    if (currentTurn === null
+      || currentTurn.personalTurnId !== turn.personalTurnId) {
+      return {
+        ok: false,
+        state,
+        events: [],
+        reason: 'COMBINED_TURN_END_EXTENSIONS_INVALID_TURN',
+      }
+    }
+    const result = apply(currentState, currentTurn)
+    if (!result.ok) return { ...result, state, events: [] }
+    currentState = result.state
+    events.push(...result.events)
+  }
+  return { ok: true, state: currentState, events }
+}
+
 export function combineBattleEngineExtensions(
   ...extensions: readonly BattleEngineExtensions[]
 ): BattleEngineExtensions {
@@ -66,6 +94,9 @@ export function combineBattleEngineExtensions(
     },
     applyAfterActionEffects(state, action) {
       return runAfterActionExtensions(extensions, state, action)
+    },
+    applyUnitTurnEndEffects(state, turn) {
+      return runTurnEndExtensions(extensions, state, turn)
     },
     runAutomaticAction(state) {
       for (const extension of extensions) {

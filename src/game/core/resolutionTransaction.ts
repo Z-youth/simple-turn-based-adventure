@@ -13,6 +13,7 @@ import type {
 } from './contexts'
 import type { BattleEvent } from './events'
 import type {
+  ActionId,
   AttackId,
   DamageEventId,
   UnitId,
@@ -22,6 +23,7 @@ import type {
   AttackTargetRequest,
   SkillEffectRequest,
   SkillResolutionRequest,
+  TriggeredSkillResolutionRequest,
 } from './attacks'
 import {
   calculateExtraDamage,
@@ -98,6 +100,7 @@ export type SkillResolutionErrorCode = CombatUnitValidationErrorCode
   | 'NOT_AT_TRIGGERED_SKILL_RESOLUTION_BOUNDARY'
   | 'TRIGGERED_SKILL_ACTION_NOT_COMPLETED'
   | 'TRIGGERED_SKILL_ROLLBACK_STATE_MISSING'
+  | 'NOT_AT_TURN_END_TRIGGERED_SKILL_RESOLUTION_BOUNDARY'
 
 export interface SkillResolutionSuccess {
   readonly ok: true
@@ -115,6 +118,8 @@ export interface SkillResolutionFailure {
 export type SkillResolutionResult =
   | SkillResolutionSuccess
   | SkillResolutionFailure
+
+type ResolutionRequest = SkillResolutionRequest | TriggeredSkillResolutionRequest
 
 function failure(
   state: BattleState,
@@ -171,7 +176,7 @@ function collectDamageEventIds(
 }
 
 function orderedEffects(
-  request: SkillResolutionRequest,
+  request: ResolutionRequest,
 ): readonly SkillEffectRequest[] {
   return request.effects ?? request.attacks.map((attack) => ({
     kind: 'attack' as const,
@@ -180,7 +185,7 @@ function orderedEffects(
 }
 
 function orderedAttacks(
-  request: SkillResolutionRequest,
+  request: ResolutionRequest,
 ): readonly AttackRequest[] {
   return orderedEffects(request).flatMap((effect) => (
     effect.kind === 'attack' ? [effect.attack] : []
@@ -189,7 +194,7 @@ function orderedAttacks(
 
 function validateResolutionPayload(
   state: BattleState,
-  request: SkillResolutionRequest,
+  request: ResolutionRequest,
 ): SkillResolutionErrorCode | null {
   if (validateRandomState(state.rngState) !== null) return 'INVALID_RANDOM_STATE'
 
@@ -287,7 +292,7 @@ function validateRequest(
 
 function validateTriggeredRequest(
   state: BattleState,
-  request: SkillResolutionRequest,
+  request: TriggeredSkillResolutionRequest,
 ): SkillResolutionErrorCode | null {
   const turn = state.personalTurn
   if (
@@ -303,8 +308,38 @@ function validateTriggeredRequest(
   if (state.actionRollbackState === null) {
     return 'TRIGGERED_SKILL_ROLLBACK_STATE_MISSING'
   }
-  if (!turn.completedActionIds.includes(request.actionId)) {
+  if (request.actionId === null
+    || !turn.completedActionIds.includes(request.actionId)) {
     return 'TRIGGERED_SKILL_ACTION_NOT_COMPLETED'
+  }
+  if (turn.personalTurnId !== request.personalTurnId) {
+    return 'PERSONAL_TURN_ID_MISMATCH'
+  }
+  if (turn.sequenceId !== request.sequenceId) return 'SEQUENCE_ID_MISMATCH'
+  if (turn.unitId !== request.casterId) return 'CASTER_ID_MISMATCH'
+  if (state.resolutionIds.skillExecutionIds.includes(request.skillExecutionId)) {
+    return 'SKILL_EXECUTION_ID_ALREADY_USED'
+  }
+  return validateResolutionPayload(state, request)
+}
+
+function validateTurnEndTriggeredRequest(
+  state: BattleState,
+  request: TriggeredSkillResolutionRequest,
+): SkillResolutionErrorCode | null {
+  const turn = state.personalTurn
+  if (
+    state.phase !== BattlePhase.TurnEnd
+    || turn === null
+    || turn.phase !== PersonalTurnPhase.EndingUnitSpecificEffects
+    || state.activeAction !== null
+  ) return 'NOT_AT_TURN_END_TRIGGERED_SKILL_RESOLUTION_BOUNDARY'
+  if (request.actionId !== null) {
+    return 'NOT_AT_TURN_END_TRIGGERED_SKILL_RESOLUTION_BOUNDARY'
+  }
+  if (state.activeSkill !== null) return 'ACTIVE_SKILL_ALREADY_EXISTS'
+  if (state.completedSkillResolution !== null) {
+    return 'SKILL_EXECUTION_ID_ALREADY_USED'
   }
   if (turn.personalTurnId !== request.personalTurnId) {
     return 'PERSONAL_TURN_ID_MISMATCH'
@@ -325,7 +360,7 @@ function replaceUnit(
 }
 
 function createDamageEvent(
-  request: SkillResolutionRequest,
+  request: ResolutionRequest,
   attack: AttackRequest,
   target: AttackTargetRequest,
   rawValue: number,
@@ -410,15 +445,24 @@ function uniqueTargetIds(attacks: readonly AttackRequest[]): readonly UnitId[] {
 
 function resolveSkillTransactionInternal(
   state: BattleState,
-  request: SkillResolutionRequest,
-  triggered: boolean,
+  request: ResolutionRequest,
+  mode: 'action' | 'afterAction' | 'turnEnd',
 ): SkillResolutionResult {
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)
-  const invalid = triggered
-    ? validateTriggeredRequest(state, request)
-    : validateRequest(state, request)
+  const invalid = mode === 'action'
+    ? validateRequest(state, request as SkillResolutionRequest)
+    : mode === 'afterAction'
+      ? validateTriggeredRequest(state, request as TriggeredSkillResolutionRequest)
+      : validateTurnEndTriggeredRequest(
+          state,
+          request as TriggeredSkillResolutionRequest,
+        )
   if (invalid !== null) return failure(state, invalid)
+  const actionId = request.actionId
+  if (mode === 'action' && actionId === null) {
+    return failure(state, 'ACTION_ID_MISMATCH')
+  }
 
   const effects = orderedEffects(request)
   const attacks = orderedAttacks(request)
@@ -819,11 +863,11 @@ function resolveSkillTransactionInternal(
     statusBatches,
     statusAcquisitionOrders,
     activeSkill: null,
-    completedSkillResolution: triggered
+    completedSkillResolution: mode !== 'action'
       ? state.completedSkillResolution
       : {
           skillExecutionId: request.skillExecutionId,
-          actionId: request.actionId,
+          actionId: actionId as ActionId,
           personalTurnId: request.personalTurnId,
           sequenceId: request.sequenceId,
         },
@@ -858,12 +902,19 @@ export function resolveSkillTransaction(
   state: BattleState,
   request: SkillResolutionRequest,
 ): SkillResolutionResult {
-  return resolveSkillTransactionInternal(state, request, false)
+  return resolveSkillTransactionInternal(state, request, 'action')
 }
 
 export function resolveTriggeredSkillTransaction(
   state: BattleState,
-  request: SkillResolutionRequest,
+  request: TriggeredSkillResolutionRequest,
 ): SkillResolutionResult {
-  return resolveSkillTransactionInternal(state, request, true)
+  return resolveSkillTransactionInternal(state, request, 'afterAction')
+}
+
+export function resolveTurnEndTriggeredSkillTransaction(
+  state: BattleState,
+  request: TriggeredSkillResolutionRequest,
+): SkillResolutionResult {
+  return resolveSkillTransactionInternal(state, request, 'turnEnd')
 }

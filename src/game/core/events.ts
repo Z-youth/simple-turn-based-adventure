@@ -110,7 +110,7 @@ export interface ActionCompletedEvent extends ActionEventBase {
 
 interface SkillResolutionEventBase {
   readonly skillExecutionId: SkillExecutionId
-  readonly actionId: ActionId
+  readonly actionId: ActionId | null
   readonly skillId: SkillId
   readonly casterId: UnitId
 }
