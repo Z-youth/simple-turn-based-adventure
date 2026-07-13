@@ -1,7 +1,23 @@
 import { Camp } from './enums'
 import type { TurnQueueEntry } from './contexts'
 import type { UnitState } from './units'
+import { validateBattleRuntimeUnits } from './combatValidation'
 import { getPositionOrderWeight, isUnitAlive } from './unitQueries'
+
+export interface TurnQueueCreationSuccess {
+  readonly ok: true
+  readonly queue: readonly TurnQueueEntry[]
+}
+
+export interface TurnQueueCreationFailure {
+  readonly ok: false
+  readonly queue: readonly []
+  readonly reason: 'INVALID_UNIT_BASE_ATTACK'
+}
+
+export type TurnQueueCreationResult =
+  | TurnQueueCreationSuccess
+  | TurnQueueCreationFailure
 
 function compareNumbers(left: number, right: number): number {
   return left < right ? -1 : left > right ? 1 : 0
@@ -66,8 +82,12 @@ export function isEligibleForTurnQueue(unit: UnitState): boolean {
 
 export function createTurnQueue(
   units: readonly UnitState[],
-): readonly TurnQueueEntry[] {
-  return units
+): TurnQueueCreationResult {
+  const invalidUnits = validateBattleRuntimeUnits(units)
+  if (invalidUnits !== null) {
+    return { ok: false, queue: [], reason: invalidUnits }
+  }
+  const queue = units
     .filter(isEligibleForTurnQueue)
     .slice()
     .sort(compareUnitsForTurnOrder)
@@ -75,4 +95,5 @@ export function createTurnQueue(
       unitId: unit.id,
       speedAtSequenceStart: unit.speed,
     }))
+  return { ok: true, queue }
 }

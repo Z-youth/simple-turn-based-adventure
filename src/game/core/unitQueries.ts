@@ -10,11 +10,15 @@ export function getBaseAttackAtBattleEntry(unit: UnitState): number {
   return unit.baseAttackAtBattleEntry
 }
 
+export function getMomentumAttackCap(baseAttackAtBattleEntry: number): number {
+  return clampMinimum(baseAttackAtBattleEntry * 2, 0)
+}
+
 export function getMomentumAttackBonus(
   baseAttackAtBattleEntry: number,
   momentum: number,
 ): number {
-  const maximumBonus = clampMinimum(baseAttackAtBattleEntry * 2, 0)
+  const maximumBonus = getMomentumAttackCap(baseAttackAtBattleEntry)
   return Math.min(clampMinimum(momentum, 0), maximumBonus)
 }
 

@@ -21,6 +21,67 @@ function actionId(value: string): ActionId {
 }
 
 describe('battle sequence engine', () => {
+  it.each([
+    0,
+    -1,
+    0.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.NEGATIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 1,
+  ])('rejects battle-entry base attack %s before creating a sequence', (value) => {
+    const initialState = createBattleState([
+      createUnit('invalid', { baseAttackAtBattleEntry: value }),
+    ])
+    const started = startBattleSequence(initialState)
+
+    expect(started).toEqual({
+      ok: false,
+      state: initialState,
+      events: [],
+      reason: 'INVALID_UNIT_BASE_ATTACK',
+    })
+    expect(started.state.turnSequence).toBeNull()
+    expect(started.state.personalTurn).toBeNull()
+    expect(started.state.events).toBe(initialState.events)
+    expect(started.state.rngState).toBe(initialState.rngState)
+  })
+
+  it.each([
+    { alive: false, currentHealth: 100 },
+    { alive: true, currentHealth: 0 },
+  ])('rejects starting a new action for a dead actor %o', (override) => {
+    const started = startBattleSequence(createBattleState([
+      createUnit('actor'),
+    ]))
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    const units = started.state.units.map((unit) => (
+      unit.id === unitId('actor') ? { ...unit, ...override } : unit
+    ))
+    const state = { ...started.state, units }
+    const result = startBattleAction(state, {
+      actionId: actionId('dead-actor'),
+      actorId: unitId('actor'),
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      state,
+      events: [],
+      reason: 'ACTION_ACTOR_DEAD',
+    })
+    expect(result.state).toBe(state)
+    expect(result.state.units).toBe(units)
+    expect(result.state.events).toBe(state.events)
+    expect(result.state.rngState).toBe(state.rngState)
+    expect(result.state.activeAction).toBeNull()
+    expect(result.state.phase).toBe(BattlePhase.AwaitingAction)
+    expect(result.state.events.some((event) => (
+      event.type === 'ACTION_CONFIRMED' || event.type === 'ACTION_STARTED'
+    ))).toBe(false)
+  })
+
   it('stops stably when no eligible units exist without creating empty sequences repeatedly', () => {
     const initialState = createBattleState([])
     const started = startBattleSequence(initialState)
@@ -341,7 +402,11 @@ describe('battle action engine', () => {
     const started = startBattleSequence(createBattleState([createUnit('actor')]))
     expect(started.ok).toBe(true)
     if (!started.ok || started.state.personalTurn === null) return
-    const ended = finishPersonalTurn(started.state.personalTurn, true)
+    const ended = finishPersonalTurn(
+      started.state.personalTurn,
+      true,
+      started.state.units,
+    )
     expect(ended.ok).toBe(true)
     if (!ended.ok) return
     const endedState = {

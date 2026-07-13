@@ -16,7 +16,9 @@ import type {
   StatusId,
   TurnSequenceId,
   UnitId,
+  ResourceTransactionId,
 } from './identifiers'
+import type { ResourceType } from './resources'
 
 interface SequenceEventBase {
   readonly sequenceId: TurnSequenceId
@@ -180,6 +182,64 @@ export interface AttackCompletedEvent {
   readonly attackId: AttackId
 }
 
+export interface ResourceChangedEvent {
+  readonly type: 'RESOURCE_GAINED' | 'RESOURCE_SPENT'
+  readonly unitId: UnitId
+  readonly resourceType: ResourceType
+  readonly amount: number
+  readonly before: number
+  readonly after: number
+  readonly reason: string
+  readonly sourceId: string | null
+  readonly actionId: ActionId | null
+  readonly personalTurnId: PersonalTurnId | null
+  readonly sequenceId: TurnSequenceId | null
+  readonly skillExecutionId: SkillExecutionId | null
+  readonly resourceTransactionId: ResourceTransactionId | null
+}
+
+export interface MomentumPressureRecalculatedEvent {
+  readonly type: 'MOMENTUM_PRESSURE_RECALCULATED'
+  readonly unitId: UnitId
+  readonly personalTurnId: PersonalTurnId
+  readonly sequenceId: TurnSequenceId
+  readonly momentum: number
+  readonly before: number
+  readonly after: number
+}
+
+export interface MomentumPressureClearedEvent {
+  readonly type: 'MOMENTUM_PRESSURE_CLEARED'
+  readonly unitId: UnitId
+  readonly personalTurnId: PersonalTurnId
+  readonly sequenceId: TurnSequenceId
+  readonly before: number
+  readonly after: 0
+}
+
+export interface MomentumPressureTriggeredEvent {
+  readonly type: 'MOMENTUM_PRESSURE_TRIGGERED'
+  readonly skillExecutionId: SkillExecutionId
+  readonly attackId: AttackId
+  readonly damageEventId: DamageEventId
+  readonly sourceUnitId: UnitId
+  readonly targetUnitId: UnitId
+  readonly momentumPressure: number
+  readonly extraDamage: number
+}
+
+export interface ShieldGainedEvent {
+  readonly type: 'SHIELD_GAINED'
+  readonly unitId: UnitId
+  readonly amount: number
+  readonly before: number
+  readonly after: number
+  readonly reason: string
+  readonly personalTurnId: PersonalTurnId | null
+  readonly sequenceId: TurnSequenceId | null
+  readonly skillExecutionId: SkillExecutionId | null
+}
+
 export type StatusChangeKind =
   | 'STATUS_ACQUIRED'
   | 'STATUS_BATCH_MERGED'
@@ -229,4 +289,9 @@ export type BattleEvent =
   | UnitDiedEvent
   | ExtraDamageAppliedEvent
   | AttackCompletedEvent
+  | ResourceChangedEvent
+  | MomentumPressureRecalculatedEvent
+  | MomentumPressureClearedEvent
+  | MomentumPressureTriggeredEvent
+  | ShieldGainedEvent
   | StatusChangedEvent

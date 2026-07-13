@@ -1,6 +1,9 @@
 import { ActionLifecycleStage, PersonalTurnPhase } from './enums'
 import type { ActionContext, PersonalTurnState } from './contexts'
 import type { BattleEvent } from './events'
+import type { UnitState } from './units'
+import { validateBattleRuntimeUnits } from './combatValidation'
+import { isUnitAlive } from './unitQueries'
 import type {
   ActionId,
   SkillExecutionId,
@@ -36,6 +39,17 @@ export interface ActionLifecycleFailure {
 export type StartActionResult = StartActionSuccess | ActionLifecycleFailure
 export type CompleteActionResult = CompleteActionSuccess | ActionLifecycleFailure
 
+function validateActionUnits(
+  units: readonly UnitState[],
+  actorId: UnitId,
+): string | null {
+  const invalidUnits = validateBattleRuntimeUnits(units)
+  if (invalidUnits !== null) return invalidUnits
+  return units.some((unit) => unit.id === actorId)
+    ? null
+    : 'ACTION_ACTOR_NOT_FOUND'
+}
+
 function getActionEventBase(
   turn: PersonalTurnState,
   actionId: ActionId,
@@ -52,7 +66,14 @@ function getActionEventBase(
 export function beginAction(
   turn: PersonalTurnState,
   input: StartActionInput,
+  units: readonly UnitState[],
 ): StartActionResult {
+  const invalidUnits = validateActionUnits(units, input.actorId)
+  if (invalidUnits !== null) return { ok: false, reason: invalidUnits }
+  const actor = units.find((unit) => unit.id === input.actorId)
+  if (actor === undefined || !isUnitAlive(actor)) {
+    return { ok: false, reason: 'ACTION_ACTOR_DEAD' }
+  }
   if (turn.phase !== PersonalTurnPhase.AwaitingAction) {
     return { ok: false, reason: 'PERSONAL_TURN_NOT_AWAITING_ACTION' }
   }
@@ -65,14 +86,18 @@ export function beginAction(
 
   const countsAsAction = input.countsAsAction ?? true
   const endsTurn = input.endsTurn ?? true
+  const skillExecutionId = input.skillExecutionId ?? null
   const action: ActionContext = {
     actionId: input.actionId,
     actorId: input.actorId,
     personalTurnId: turn.personalTurnId,
     sequenceId: turn.sequenceId,
-    skillExecutionId: input.skillExecutionId ?? null,
+    skillExecutionId,
     countsAsAction,
     endsTurn,
+    stage: skillExecutionId === null
+      ? ActionLifecycleStage.SkillResolution
+      : ActionLifecycleStage.ResourceValidationAndPayment,
   }
   const baseEvent = getActionEventBase(turn, action.actionId)
   const events: BattleEvent[] = [
@@ -92,18 +117,18 @@ export function beginAction(
       stage: ActionLifecycleStage.OnAction,
     })
   }
-  events.push(
-    {
-      type: 'ACTION_STAGE_REACHED',
-      ...baseEvent,
-      stage: ActionLifecycleStage.ResourceValidationAndPayment,
-    },
-    {
+  events.push({
+    type: 'ACTION_STAGE_REACHED',
+    ...baseEvent,
+    stage: ActionLifecycleStage.ResourceValidationAndPayment,
+  })
+  if (skillExecutionId === null) {
+    events.push({
       type: 'ACTION_STAGE_REACHED',
       ...baseEvent,
       stage: ActionLifecycleStage.SkillResolution,
-    },
-  )
+    })
+  }
 
   return {
     ok: true,
@@ -121,7 +146,10 @@ export function finishAction(
   turn: PersonalTurnState,
   action: ActionContext,
   actionId: ActionId,
+  units: readonly UnitState[],
 ): CompleteActionResult {
+  const invalidUnits = validateActionUnits(units, action.actorId)
+  if (invalidUnits !== null) return { ok: false, reason: invalidUnits }
   if (turn.phase !== PersonalTurnPhase.ResolvingAction) {
     return { ok: false, reason: 'NO_ACTION_IS_RESOLVING' }
   }

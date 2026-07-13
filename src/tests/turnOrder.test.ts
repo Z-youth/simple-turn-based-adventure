@@ -7,7 +7,9 @@ import {
 import { createUnit } from './battleTestUtils'
 
 function orderedIds(units: ReturnType<typeof createUnit>[]): string[] {
-  return createTurnQueue(units).map((entry) => entry.unitId)
+  const result = createTurnQueue(units)
+  if (!result.ok) throw new Error(result.reason)
+  return result.queue.map((entry) => entry.unitId)
 }
 
 describe('turn order', () => {

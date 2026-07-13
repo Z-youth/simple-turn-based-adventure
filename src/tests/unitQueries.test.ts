@@ -6,6 +6,7 @@ import {
   getBaseAttackAtBattleEntry,
   getCriticalProbabilitySummary,
   getEffectiveAttack,
+  getMomentumAttackCap,
   getMomentumAttackBonus,
   getPositionOrderWeight,
   isBackPosition,
@@ -46,6 +47,13 @@ function createUnit(overrides: Partial<UnitState> = {}): UnitState {
 }
 
 describe('unit attack queries', () => {
+  it.each([
+    [10, 20],
+    [20, 40],
+  ])('uses twice base attack %s as momentum attack cap %s', (base, cap) => {
+    expect(getMomentumAttackCap(base)).toBe(cap)
+  })
+
   it.each([
     [0, 0],
     [20, 20],

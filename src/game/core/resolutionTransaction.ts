@@ -1,4 +1,10 @@
-import { BattlePhase, DamageType, PersonalTurnPhase } from './enums'
+import {
+  ActionLifecycleStage,
+  BattlePhase,
+  DamageType,
+  PersonalTurnPhase,
+  UnitSystem,
+} from './enums'
 import type {
   AttackContext,
   BattleState,
@@ -34,7 +40,16 @@ import type { UnitState } from './units'
 import type { RandomState } from './rng'
 import { validateRandomState } from './rng'
 import type { CombatUnitValidationErrorCode } from './combatValidation'
-import { validateCombatUnit } from './combatValidation'
+import {
+  validateBattleStateUnits,
+  validateCombatUnit,
+} from './combatValidation'
+import { unitResourcesMatchConfiguration } from './resources'
+import {
+  createMomentumPressureDamageEventId,
+  getMomentumPressureExtraDamage,
+  MOMENTUM_PRESSURE_TRIGGER_LOCK_ID,
+} from './momentumPressure'
 
 export type SkillResolutionErrorCode = CombatUnitValidationErrorCode
   | 'NOT_AT_SKILL_RESOLUTION_BOUNDARY'
@@ -57,6 +72,7 @@ export type SkillResolutionErrorCode = CombatUnitValidationErrorCode
   | 'INVALID_RANDOM_STATE'
   | 'INVALID_SHIELD_CALCULATION'
   | 'RANDOM_SOURCE_EXHAUSTED'
+  | 'RESOURCE_PAYMENT_NOT_COMPLETED'
 
 export interface SkillResolutionSuccess {
   readonly ok: true
@@ -117,12 +133,16 @@ function duplicateValue<Value>(values: readonly Value[]): boolean {
 
 function collectDamageEventIds(
   attacks: readonly AttackRequest[],
+  includeMomentumPressure: boolean,
 ): readonly DamageEventId[] {
-  return attacks.flatMap((attack) => attack.targets.flatMap((target) => (
-    target.extraDamage === undefined
+  return attacks.flatMap((attack) => attack.targets.flatMap((target) => {
+    const result = target.extraDamage === undefined
       ? [target.damageEventId]
       : [target.damageEventId, target.extraDamage.damageEventId]
-  )))
+    return includeMomentumPressure && (target.hit ?? true)
+      ? [...result, createMomentumPressureDamageEventId(target.damageEventId)]
+      : result
+  }))
 }
 
 function validateRequest(
@@ -134,6 +154,9 @@ function validateRequest(
     || state.personalTurn?.phase !== PersonalTurnPhase.ResolvingAction
   ) return 'NOT_AT_SKILL_RESOLUTION_BOUNDARY'
   if (state.activeAction === null) return 'NO_ACTIVE_ACTION'
+  if (state.activeAction.stage !== ActionLifecycleStage.SkillResolution) {
+    return 'RESOURCE_PAYMENT_NOT_COMPLETED'
+  }
   if (state.activeSkill !== null) return 'ACTIVE_SKILL_ALREADY_EXISTS'
   if (state.completedSkillResolution !== null) {
     return 'SKILL_EXECUTION_ID_ALREADY_USED'
@@ -149,6 +172,18 @@ function validateRequest(
   if (state.activeAction.skillExecutionId !== request.skillExecutionId) {
     return 'SKILL_EXECUTION_ID_MISMATCH'
   }
+  const payment = state.completedResourcePayment
+  if (
+    payment === null
+    || payment.skillExecutionId !== request.skillExecutionId
+    || payment.actionId !== request.actionId
+    || payment.personalTurnId !== request.personalTurnId
+    || payment.sequenceId !== request.sequenceId
+    || payment.payerUnitId !== request.casterId
+    || !state.resourcePaymentRegistry.paidSkillExecutionIds.includes(
+      request.skillExecutionId,
+    )
+  ) return 'RESOURCE_PAYMENT_NOT_COMPLETED'
   if (state.resolutionIds.skillExecutionIds.includes(request.skillExecutionId)) {
     return 'SKILL_EXECUTION_ID_ALREADY_USED'
   }
@@ -159,12 +194,19 @@ function validateRequest(
   if (attacker === undefined) return 'ATTACKER_NOT_FOUND'
   const invalidAttacker = validateCombatUnit(attacker)
   if (invalidAttacker !== null) return invalidAttacker
+  if (!unitResourcesMatchConfiguration(
+    attacker,
+    state.resourceConfiguration,
+  )) return 'INVALID_UNIT_RESOURCE_STATE'
   const attackIds = request.attacks.map((attack) => attack.attackId)
   if (duplicateValue(attackIds) || attackIds.some((attackId) => (
     state.resolutionIds.attackIds.includes(attackId)
   ))) return 'ATTACK_ID_ALREADY_USED'
 
-  const damageEventIds = collectDamageEventIds(request.attacks)
+  const damageEventIds = collectDamageEventIds(
+    request.attacks,
+    attacker.system === UnitSystem.Momentum && attacker.momentumPressure > 0,
+  )
   if (duplicateValue(damageEventIds) || damageEventIds.some((damageEventId) => (
     state.resolutionIds.damageEventIds.includes(damageEventId)
   ))) return 'DAMAGE_EVENT_ID_ALREADY_USED'
@@ -182,6 +224,10 @@ function validateRequest(
       if (target === undefined) return 'TARGET_NOT_FOUND'
       const invalidTarget = validateCombatUnit(target)
       if (invalidTarget !== null) return invalidTarget
+      if (!unitResourcesMatchConfiguration(
+        target,
+        state.resourceConfiguration,
+      )) return 'INVALID_UNIT_RESOURCE_STATE'
       if (!target.alive || (!target.hasInfiniteHealth && target.currentHealth <= 0)) {
         return 'TARGET_INVALID_BEFORE_SKILL_START'
       }
@@ -227,6 +273,7 @@ function createDamageEvent(
     remainingHealth,
     causedDeath,
     targetWasAlreadyDead,
+    extraDamageSource: null,
   }
 }
 
@@ -284,6 +331,8 @@ export function resolveSkillTransaction(
   state: BattleState,
   request: SkillResolutionRequest,
 ): SkillResolutionResult {
+  const invalidUnits = validateBattleStateUnits(state)
+  if (invalidUnits !== null) return failure(state, invalidUnits)
   const invalid = validateRequest(state, request)
   if (invalid !== null) return failure(state, invalid)
 
@@ -313,6 +362,11 @@ export function resolveSkillTransaction(
         units,
         attack.targets.map((target) => target.targetId),
       )
+      const currentAttacker = units.find((unit) => unit.id === request.casterId)
+      if (currentAttacker === undefined) return failure(state, 'ATTACKER_NOT_FOUND')
+      const momentumPressureSnapshot = currentAttacker.system === UnitSystem.Momentum
+        ? currentAttacker.momentumPressure
+        : 0
       const attackContext: AttackContext = {
         attackId: attack.attackId,
         skillExecutionId: request.skillExecutionId,
@@ -327,6 +381,7 @@ export function resolveSkillTransaction(
           lockedAtSkillStart: true,
         })),
         protectionSnapshot: snapshot,
+        momentumPressureSnapshot,
       }
       events.push({ type: 'ATTACK_STARTED', context: attackContext })
 
@@ -470,6 +525,7 @@ export function resolveSkillTransaction(
             remainingHealth: extraApplied.remainingHealth,
             causedDeath: extraApplied.causedDeath,
             targetWasAlreadyDead: extraApplied.targetWasAlreadyDead,
+            extraDamageSource: 'generic',
           }
           events.push({ type: 'EXTRA_DAMAGE_APPLIED', damage: extraDamage })
           if (extraDamage.causedDeath) {
@@ -480,6 +536,84 @@ export function resolveSkillTransaction(
               damageEventId: extraDamage.eventId,
               unitId: extraDamage.targetUnitId,
             })
+          }
+        }
+
+        const pressureExtraValue = getMomentumPressureExtraDamage(
+          momentumPressureSnapshot,
+        )
+        if (!Number.isFinite(pressureExtraValue)) {
+          return failure(state, 'INVALID_NUMERIC_INPUT')
+        }
+        if (pressureExtraValue > 0) {
+          const lockResult = acquirePerTargetTriggerLock(
+            skillContext,
+            MOMENTUM_PRESSURE_TRIGGER_LOCK_ID,
+            targetRequest.targetId,
+          )
+          if (lockResult.acquired) {
+            skillContext = lockResult.context
+            const currentTarget = units.find(
+              (unit) => unit.id === targetRequest.targetId,
+            )
+            if (currentTarget === undefined) {
+              return failure(state, 'TARGET_NOT_FOUND')
+            }
+            const pressureDamageEventId = createMomentumPressureDamageEventId(
+              targetRequest.damageEventId,
+            )
+            const pressureApplied = calculateDirectHealthDamage({
+              currentHealth: currentTarget.currentHealth,
+              hasInfiniteHealth: currentTarget.hasInfiniteHealth,
+              alive: currentTarget.alive,
+              resolvedDamage: pressureExtraValue,
+            })
+            if (!pressureApplied.ok) {
+              return failure(state, 'INVALID_SHIELD_CALCULATION')
+            }
+            units = replaceUnit(units, {
+              ...currentTarget,
+              currentHealth: pressureApplied.remainingHealth,
+              alive: pressureApplied.causedDeath ? false : currentTarget.alive,
+            })
+            const pressureDamage: DamageEvent = {
+              eventId: pressureDamageEventId,
+              attackId: attack.attackId,
+              skillExecutionId: request.skillExecutionId,
+              sourceUnitId: request.casterId,
+              targetUnitId: targetRequest.targetId,
+              damageType: DamageType.Extra,
+              rawValue: pressureExtraValue,
+              resolvedValue: pressureExtraValue,
+              critical: false,
+              shieldAbsorbed: 0,
+              healthLost: pressureApplied.healthLost,
+              remainingShield: currentTarget.shield,
+              remainingHealth: pressureApplied.remainingHealth,
+              causedDeath: pressureApplied.causedDeath,
+              targetWasAlreadyDead: pressureApplied.targetWasAlreadyDead,
+              extraDamageSource: 'momentumPressure',
+            }
+            events.push({
+              type: 'MOMENTUM_PRESSURE_TRIGGERED',
+              skillExecutionId: request.skillExecutionId,
+              attackId: attack.attackId,
+              damageEventId: pressureDamageEventId,
+              sourceUnitId: request.casterId,
+              targetUnitId: targetRequest.targetId,
+              momentumPressure: momentumPressureSnapshot,
+              extraDamage: pressureExtraValue,
+            })
+            events.push({ type: 'EXTRA_DAMAGE_APPLIED', damage: pressureDamage })
+            if (pressureDamage.causedDeath) {
+              events.push({
+                type: 'UNIT_DIED',
+                skillExecutionId: request.skillExecutionId,
+                attackId: attack.attackId,
+                damageEventId: pressureDamage.eventId,
+                unitId: pressureDamage.targetUnitId,
+              })
+            }
           }
         }
       }
@@ -524,7 +658,14 @@ export function resolveSkillTransaction(
       ],
       damageEventIds: [
         ...state.resolutionIds.damageEventIds,
-        ...collectDamageEventIds(request.attacks),
+        ...collectDamageEventIds(
+          request.attacks,
+          state.units.some((unit) => (
+            unit.id === request.casterId
+            && unit.system === UnitSystem.Momentum
+            && unit.momentumPressure > 0
+          )),
+        ),
       ],
     },
     rngState,

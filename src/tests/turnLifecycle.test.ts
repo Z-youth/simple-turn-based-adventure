@@ -1,17 +1,55 @@
 import { describe, expect, it } from 'vitest'
 import { PersonalTurnPhase, TurnStartStage } from '../game/core/enums'
 import type { PersonalTurnState, TurnSequenceState } from '../game/core/contexts'
-import type { TurnSequenceId } from '../game/core/identifiers'
+import type { TurnSequenceId, UnitId } from '../game/core/identifiers'
 import {
-  advanceTurnEndStage,
-  advanceTurnStartStage,
-  beginPersonalTurnEnd,
-  createPersonalTurn,
-  finishPersonalTurn,
-  startPersonalTurn,
+  advanceTurnEndStage as advanceRuntimeTurnEndStage,
+  advanceTurnStartStage as advanceRuntimeTurnStartStage,
+  beginPersonalTurnEnd as beginRuntimePersonalTurnEnd,
+  createPersonalTurn as createRuntimePersonalTurn,
+  finishPersonalTurn as finishRuntimePersonalTurn,
+  startPersonalTurn as startRuntimePersonalTurn,
   TURN_END_STAGE_ORDER,
 } from '../game/core/turnLifecycle'
-import { unitId } from './battleTestUtils'
+import { createUnit, unitId } from './battleTestUtils'
+
+const runtimeUnits = [createUnit('actor')]
+
+function createPersonalTurn(
+  value: TurnSequenceState,
+  actorId: UnitId,
+) {
+  return createRuntimePersonalTurn(value, actorId, runtimeUnits)
+}
+
+function advanceTurnStartStage(turn: PersonalTurnState) {
+  return advanceRuntimeTurnStartStage(turn, runtimeUnits)
+}
+
+function startPersonalTurn(
+  value: TurnSequenceState,
+  actorId: UnitId,
+) {
+  return startRuntimePersonalTurn(value, actorId, runtimeUnits)
+}
+
+function beginPersonalTurnEnd(
+  turn: PersonalTurnState,
+  actorIsAlive: boolean,
+) {
+  return beginRuntimePersonalTurnEnd(turn, actorIsAlive, runtimeUnits)
+}
+
+function advanceTurnEndStage(turn: PersonalTurnState) {
+  return advanceRuntimeTurnEndStage(turn, runtimeUnits)
+}
+
+function finishPersonalTurn(
+  turn: PersonalTurnState,
+  actorIsAlive: boolean,
+) {
+  return finishRuntimePersonalTurn(turn, actorIsAlive, runtimeUnits)
+}
 
 const sequence: TurnSequenceState = {
   sequenceId: 'sequence:1' as TurnSequenceId,
@@ -52,6 +90,8 @@ describe('personal turn lifecycle', () => {
 
   it('advances every turn-start phase without skipping or moving backward', () => {
     const created = createPersonalTurn(sequence, unitId('actor'))
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
     expect(created.turn.phase).toBe(PersonalTurnPhase.NotStarted)
 
     const delayed = requireTurn(advanceTurnStartStage(created.turn))

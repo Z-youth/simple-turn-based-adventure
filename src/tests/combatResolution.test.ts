@@ -18,6 +18,8 @@ import {
   startBattleAction,
   startBattleSequence,
 } from '../game/core/battleEngine'
+import { resolveResourcePaidSkillTransaction } from '../game/core/resourceTransaction'
+import type { ResourceTransactionId } from '../game/core/identifiers'
 import { createBattleState, createUnit, unitId } from './battleTestUtils'
 import { createResolvingState, ids, skillRequest } from './combatTestUtils'
 
@@ -938,9 +940,17 @@ describe('skill completion gate', () => {
     })
     expect(action.ok).toBe(true)
     if (!action.ok) return
-    const resolved = resolveBattleSkill(action.state, skillRequest(action.state, [
-      normalAttack('kill-next', ['next']),
-    ]))
+    if (action.state.personalTurn === null || action.state.activeAction === null) return
+    const skill = skillRequest(action.state, [normalAttack('kill-next', ['next'])])
+    const resolved = resolveResourcePaidSkillTransaction(action.state, {
+      resourceTransactionId: 'resource:kill-next' as ResourceTransactionId,
+      actionId: ids.action,
+      personalTurnId: action.state.personalTurn.personalTurnId,
+      sequenceId: action.state.activeAction.sequenceId,
+      skillExecutionId: ids.skillExecution,
+      payerUnitId: unitId('actor'),
+      costs: [],
+    }, skill)
     expect(resolved.ok).toBe(true)
     if (!resolved.ok) return
     const completed = completeBattleAction(resolved.state, ids.action)

@@ -2,12 +2,45 @@ import { describe, expect, it } from 'vitest'
 import { ActionLifecycleStage, PersonalTurnPhase } from '../game/core/enums'
 import type {
   ActionId,
+  UnitId,
   TurnSequenceId,
 } from '../game/core/identifiers'
-import type { TurnSequenceState } from '../game/core/contexts'
-import { beginAction, finishAction } from '../game/core/actionLifecycle'
-import { startPersonalTurn } from '../game/core/turnLifecycle'
-import { unitId } from './battleTestUtils'
+import type {
+  ActionContext,
+  PersonalTurnState,
+  TurnSequenceState,
+} from '../game/core/contexts'
+import type { StartActionInput } from '../game/core/actionLifecycle'
+import {
+  beginAction as beginRuntimeAction,
+  finishAction as finishRuntimeAction,
+} from '../game/core/actionLifecycle'
+import { startPersonalTurn as startRuntimePersonalTurn } from '../game/core/turnLifecycle'
+import { createUnit, unitId } from './battleTestUtils'
+
+const runtimeUnits = [createUnit('actor')]
+
+function startPersonalTurn(
+  sequence: TurnSequenceState,
+  actorId: UnitId,
+) {
+  return startRuntimePersonalTurn(sequence, actorId, runtimeUnits)
+}
+
+function beginAction(
+  turn: PersonalTurnState,
+  input: StartActionInput,
+) {
+  return beginRuntimeAction(turn, input, runtimeUnits)
+}
+
+function finishAction(
+  turn: PersonalTurnState,
+  action: ActionContext,
+  id: ActionId,
+) {
+  return finishRuntimeAction(turn, action, id, runtimeUnits)
+}
 
 function actionId(value: string): ActionId {
   return value as ActionId
@@ -192,5 +225,28 @@ describe('action lifecycle', () => {
       'ACTION_STAGE_REACHED:afterAction',
       'ACTION_COMPLETED',
     ])
+  })
+
+  it.each([
+    { alive: false, currentHealth: 100 },
+    { alive: true, currentHealth: 0 },
+    { alive: true, currentHealth: -1 },
+  ])('rejects a dead actor at the low-level action start boundary %o', (override) => {
+    const turn = createTurn()
+    const startedActionIds = turn.startedActionIds
+    const units = [createUnit('actor', override)]
+    const result = beginRuntimeAction(turn, {
+      actionId: actionId('dead-actor'),
+      actorId: unitId('actor'),
+    }, units)
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'ACTION_ACTOR_DEAD',
+    })
+    expect('events' in result).toBe(false)
+    expect(turn.startedActionIds).toBe(startedActionIds)
+    expect(turn.phase).toBe(PersonalTurnPhase.AwaitingAction)
+    expect(units[0]).toMatchObject(override)
   })
 })

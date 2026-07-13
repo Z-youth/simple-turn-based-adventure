@@ -10,10 +10,21 @@ import type {
 } from '../game/core/contexts'
 import type { SequenceStartedEvent } from '../game/core/events'
 import type { BattleTransitionSuccess } from '../game/core/battleEngine'
-import type { ActionId, AttackId } from '../game/core/identifiers'
+import type {
+  ActionId,
+  AttackId,
+  ResourceTransactionId,
+} from '../game/core/identifiers'
 import type { StatusBatch } from '../game/core/statuses'
 import type { UnitState } from '../game/core/units'
 import type { RandomState } from '../game/core/rng'
+import type {
+  ResourceChangeRequest,
+  ResourceConfig,
+  ResourceCost,
+} from '../game/core/resources'
+import type { ResourcePaymentRequest } from '../game/core/resourceTransaction'
+import type { ResourceChangedEvent } from '../game/core/events'
 // @ts-expect-error Low-level status mutation is intentionally not public.
 import { addStatusBatch } from '../game/core/statusEngine'
 // @ts-expect-error Unit-returning shield mutation is intentionally not public.
@@ -33,6 +44,12 @@ declare const statusBatch: StatusBatch
 declare const rngState: RandomState
 declare const attackContext: AttackContext
 declare const damageEvent: DamageEvent
+declare const resourceConfig: ResourceConfig
+declare const resourceRequest: ResourceChangeRequest
+declare const resourceCost: ResourceCost
+declare const resourceEvent: ResourceChangedEvent
+declare const resourceTransactionId: ResourceTransactionId
+declare const resourcePaymentRequest: ResourcePaymentRequest
 
 // @ts-expect-error Core battle phase is changed only through transitions.
 battleState.phase = BattlePhase.AwaitingAction
@@ -66,6 +83,16 @@ transition.state.phase = BattlePhase.TurnEnd
 unit.currentHealth = 1
 // @ts-expect-error Shield changes only through shield resolution.
 unit.shield = 1
+// @ts-expect-error Energy changes only through resource transactions.
+unit.energy = 1
+// @ts-expect-error Momentum changes only through resource transactions.
+unit.momentum = 1
+// @ts-expect-error Momentum pressure is controlled by turn lifecycle rules.
+unit.momentumPressure = 1
+// @ts-expect-error Intent changes only through resource transactions.
+unit.intent = 1
+// @ts-expect-error Magic changes only through resource transactions.
+unit.magic = 1
 // @ts-expect-error Status batches cannot be appended externally.
 battleState.statusBatches.push(statusBatch)
 // @ts-expect-error Status acquisition history cannot be extended externally.
@@ -87,6 +114,28 @@ battleState.activeSkill?.perTargetTriggerLocks.push({
 battleState.completedSkillResolution = null
 // @ts-expect-error Resolution ID registries cannot be extended externally.
 battleState.resolutionIds.attackIds.push(otherAttackId)
+// @ts-expect-error Payment history cannot be extended externally.
+battleState.resourcePaymentRegistry.resourceTransactionIds.push(
+  resourceTransactionId,
+)
+// @ts-expect-error Payment completion is controlled by the atomic transaction.
+battleState.completedResourcePayment = null
+// @ts-expect-error Resource configuration is immutable.
+resourceConfig.minimum = -10
+// @ts-expect-error Resource requests are immutable.
+resourceRequest.amount = 2
+// @ts-expect-error Resource requests cannot carry boundary overrides.
+resourceRequest.minimum = -100
+// @ts-expect-error Resource costs are immutable.
+resourceCost.amount = 2
+// @ts-expect-error Resource payment cost arrays are immutable.
+resourcePaymentRequest.costs.push(resourceCost)
+// @ts-expect-error Resource configuration arrays are immutable.
+battleState.resourceConfiguration.resources.push(resourceConfig)
+// @ts-expect-error Action lifecycle stage is controlled by the engine.
+action.stage = 'skillResolution'
+// @ts-expect-error Resource events are immutable.
+resourceEvent.after = 99
 // @ts-expect-error RNG cursor changes only through pure random transitions.
 rngState.cursor = 1
 // @ts-expect-error Attack context identity is immutable.

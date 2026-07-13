@@ -3,6 +3,7 @@ import type { BattleState } from '../game/core/contexts'
 import type { UnitId } from '../game/core/identifiers'
 import type { UnitState } from '../game/core/units'
 import { createSeededRandomState } from '../game/core/rng'
+import { createDefaultResourceConfiguration } from '../game/core/resources'
 
 export function unitId(value: string): UnitId {
   return value as UnitId
@@ -54,12 +55,19 @@ export function createBattleState(units: readonly UnitState[]): BattleState {
     activeAction: null,
     activeSkill: null,
     completedSkillResolution: null,
+    completedResourcePayment: null,
+    resourcePaymentRegistry: {
+      resourceTransactionIds: [],
+      paidSkillExecutionIds: [],
+    },
     resolutionIds: {
       skillExecutionIds: [],
       attackIds: [],
       damageEventIds: [],
     },
     rngState: createSeededRandomState(1),
+    resourceConfiguration: createDefaultResourceConfiguration(),
+    actionRollbackState: null,
     log: [],
     events: [],
   }

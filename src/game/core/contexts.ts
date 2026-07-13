@@ -1,6 +1,7 @@
 import type {
   BattleLogEventType,
   BattlePhase,
+  ActionLifecycleStage,
   DamageType,
   PersonalTurnPhase,
 } from './enums'
@@ -17,10 +18,12 @@ import type {
   TurnSequenceId,
   TriggerLockId,
   UnitId,
+  ResourceTransactionId,
 } from './identifiers'
 import type { StatusBatch } from './statuses'
 import type { UnitState } from './units'
 import type { RandomState } from './rng'
+import type { ResourceConfiguration } from './resources'
 
 export interface TurnQueueEntry {
   readonly unitId: UnitId
@@ -54,6 +57,21 @@ export interface ActionContext {
   readonly skillExecutionId: SkillExecutionId | null
   readonly countsAsAction: boolean
   readonly endsTurn: boolean
+  readonly stage: ActionLifecycleStage
+}
+
+export interface ResourcePaymentCompletion {
+  readonly resourceTransactionId: ResourceTransactionId
+  readonly skillExecutionId: SkillExecutionId
+  readonly actionId: ActionId
+  readonly personalTurnId: PersonalTurnId
+  readonly sequenceId: TurnSequenceId
+  readonly payerUnitId: UnitId
+}
+
+export interface ResourcePaymentRegistry {
+  readonly resourceTransactionIds: readonly ResourceTransactionId[]
+  readonly paidSkillExecutionIds: readonly SkillExecutionId[]
 }
 
 export interface SkillResolutionCompletion {
@@ -94,6 +112,7 @@ export interface AttackContext {
   readonly targetIds: readonly UnitId[]
   readonly targets: readonly AttackTargetContext[]
   readonly protectionSnapshot: readonly PositionProtectionSnapshotEntry[]
+  readonly momentumPressureSnapshot: number
 }
 
 export interface AttackTargetContext {
@@ -125,6 +144,7 @@ export interface DamageEvent {
   readonly remainingHealth: number
   readonly causedDeath: boolean
   readonly targetWasAlreadyDead: boolean
+  readonly extraDamageSource: 'generic' | 'momentumPressure' | null
 }
 
 export interface BattleLogEvent {
@@ -146,7 +166,11 @@ export interface BattleState {
   readonly activeAction: ActionContext | null
   readonly activeSkill: SkillContext | null
   readonly completedSkillResolution: SkillResolutionCompletion | null
+  readonly completedResourcePayment: ResourcePaymentCompletion | null
+  readonly resourcePaymentRegistry: ResourcePaymentRegistry
   readonly resolutionIds: ResolutionIdRegistry
+  readonly resourceConfiguration: ResourceConfiguration
+  readonly actionRollbackState: BattleState | null
   readonly rngState: RandomState
   readonly log: readonly BattleLogEvent[]
   readonly events: readonly BattleEvent[]

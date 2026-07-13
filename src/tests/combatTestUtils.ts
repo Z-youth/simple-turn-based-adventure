@@ -8,6 +8,7 @@ import type {
   StatusId,
   TriggerLockId,
   TurnSequenceId,
+  ResourceTransactionId,
 } from '../game/core/identifiers'
 import type { AttackRequest, SkillResolutionRequest } from '../game/core/attacks'
 import type { BattleState } from '../game/core/contexts'
@@ -15,6 +16,7 @@ import type { RandomState } from '../game/core/rng'
 import { startBattleAction, startBattleSequence } from '../game/core/battleEngine'
 import { createBattleState } from './battleTestUtils'
 import type { UnitState } from '../game/core/units'
+import { ActionLifecycleStage } from '../game/core/enums'
 
 export const ids = {
   action: 'action:skill' as import('../game/core/identifiers').ActionId,
@@ -56,7 +58,28 @@ export function createResolvingState(
   if (!action.ok || action.state.personalTurn === null) {
     throw new Error('Could not start test action')
   }
-  return action.state
+  const activeAction = action.state.activeAction
+  if (activeAction === null) throw new Error('Could not stage test payment')
+  const resourceTransactionId = 'resource:test:paid' as ResourceTransactionId
+  return {
+    ...action.state,
+    activeAction: {
+      ...activeAction,
+      stage: ActionLifecycleStage.SkillResolution,
+    },
+    completedResourcePayment: {
+      resourceTransactionId,
+      skillExecutionId: ids.skillExecution,
+      actionId: ids.action,
+      personalTurnId: action.state.personalTurn.personalTurnId,
+      sequenceId: activeAction.sequenceId,
+      payerUnitId: activeAction.actorId,
+    },
+    resourcePaymentRegistry: {
+      resourceTransactionIds: [resourceTransactionId],
+      paidSkillExecutionIds: [ids.skillExecution],
+    },
+  }
 }
 
 export function skillRequest(
