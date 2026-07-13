@@ -44,6 +44,7 @@ export interface PersonalTurnState {
   readonly unitId: UnitId
   readonly sequenceNumber: number
   readonly phase: PersonalTurnPhase
+  readonly unitPassiveEffectsApplied: boolean
   readonly startedActionIds: readonly ActionId[]
   readonly completedActionIds: readonly ActionId[]
   readonly countedActionCount: number

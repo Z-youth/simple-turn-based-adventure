@@ -5,7 +5,11 @@ import {
 } from './enums'
 import { EndTurnConfirmation } from './commands'
 import type { EndTurnRequest } from './commands'
-import type { BattleState, TurnSequenceState } from './contexts'
+import type {
+  BattleState,
+  PersonalTurnState,
+  TurnSequenceState,
+} from './contexts'
 import type { BattleEvent } from './events'
 import type { UnitState } from './units'
 import type {
@@ -51,6 +55,16 @@ export type BattleTransitionResult =
   | BattleTransitionSuccess
   | BattleTransitionFailure
 
+export interface BattleEngineExtensions {
+  readonly applyUnitPassiveEffects?: (
+    state: BattleState,
+    turn: PersonalTurnState,
+  ) => BattleTransitionResult
+  readonly runAutomaticAction?: (
+    state: BattleState,
+  ) => BattleTransitionResult | null
+}
+
 export type EndTurnRequestStatus =
   | 'confirmationRequired'
   | 'turnEnded'
@@ -80,6 +94,12 @@ function appendEvents(
 
 function findUnit(state: BattleState, unitId: UnitId): UnitState | undefined {
   return state.units.find((unit) => unit.id === unitId)
+}
+
+function hasLivingHostileUnit(state: BattleState, camp: Camp): boolean {
+  return state.units.some((unit) => (
+    unit.camp !== camp && isUnitAlive(unit)
+  ))
 }
 
 function createSequenceId(sequenceNumber: number): TurnSequenceId {
@@ -140,9 +160,10 @@ function stopBecauseNoEligibleUnits(
   }
 }
 
-function advanceToNextLivingTurn(
+function advanceToNextLivingTurnStart(
   state: BattleState,
   precedingEvents: readonly BattleEvent[],
+  extensions?: BattleEngineExtensions,
 ): BattleTransitionResult {
   const existingSequence = state.turnSequence
   if (existingSequence === null) {
@@ -201,6 +222,32 @@ function advanceToNextLivingTurn(
         turnState = pressureResult.state
         events.push(...pressureResult.events)
       }
+      if (
+        turn.phase === PersonalTurnPhase.StartingUnitPassives
+        && !turn.unitPassiveEffectsApplied
+      ) {
+        const passiveResult = extensions?.applyUnitPassiveEffects?.(
+          turnState,
+          turn,
+        )
+        if (passiveResult !== undefined) {
+          if (!passiveResult.ok) return failure(state, passiveResult.reason)
+          const passiveTurn = passiveResult.state.personalTurn
+          if (
+            passiveTurn === null
+            || passiveTurn.personalTurnId !== turn.personalTurnId
+            || passiveTurn.phase !== PersonalTurnPhase.StartingUnitPassives
+          ) return failure(state, 'UNIT_PASSIVE_EFFECTS_INVALID_TURN')
+          turnState = {
+            ...passiveResult.state,
+            events: turnState.events,
+          }
+          turn = passiveTurn
+          events.push(...passiveResult.events)
+        }
+        turn = { ...turn, unitPassiveEffectsApplied: true }
+        turnState = { ...turnState, personalTurn: turn }
+      }
     }
     const nextState: BattleState = {
       ...turnState,
@@ -237,11 +284,76 @@ function advanceToNextLivingTurn(
     return stopBecauseNoEligibleUnits(nextState, nextSequence, events)
   }
 
-  return advanceToNextLivingTurn(nextState, events)
+  const advanced = advanceToNextLivingTurnStart(nextState, events, extensions)
+  return advanced.ok ? advanced : failure(state, advanced.reason)
+}
+
+function runAutomaticActions(
+  state: BattleState,
+  extensions: BattleEngineExtensions | undefined,
+  initialRollbackState: BattleState,
+): BattleTransitionResult {
+  if (extensions?.runAutomaticAction === undefined) {
+    return { ok: true, state, events: [] }
+  }
+
+  let currentState = state
+  let rollbackState = initialRollbackState
+  const events: BattleEvent[] = []
+  while (true) {
+    const automaticActor = currentState.personalTurn === null
+      ? undefined
+      : findUnit(currentState, currentState.personalTurn.unitId)
+    const automaticResult = extensions.runAutomaticAction(currentState)
+    if (automaticResult === null) {
+      return { ok: true, state: currentState, events }
+    }
+    if (!automaticResult.ok) {
+      return failure(rollbackState, automaticResult.reason)
+    }
+    if (automaticResult.state === currentState) {
+      return failure(rollbackState, 'AUTOMATIC_ACTION_DID_NOT_PROGRESS')
+    }
+
+    currentState = automaticResult.state
+    rollbackState = currentState
+    events.push(...automaticResult.events)
+    if (
+      automaticActor !== undefined
+      && !hasLivingHostileUnit(currentState, automaticActor.camp)
+    ) {
+      return { ok: true, state: currentState, events }
+    }
+
+    const advanced = advanceToNextLivingTurnStart(currentState, [], extensions)
+    if (!advanced.ok) return failure(rollbackState, advanced.reason)
+    currentState = advanced.state
+    events.push(...advanced.events)
+  }
+}
+
+function continueAfterCommittedTurn(
+  state: BattleState,
+  extensions?: BattleEngineExtensions,
+): BattleTransitionResult {
+  const advanced = advanceToNextLivingTurnStart(state, [], extensions)
+  if (!advanced.ok) return failure(state, advanced.reason)
+  const automatic = runAutomaticActions(
+    advanced.state,
+    extensions,
+    state,
+  )
+  if (!automatic.ok) return automatic
+  return {
+    ok: true,
+    state: automatic.state,
+    events: [...advanced.events, ...automatic.events],
+  }
 }
 
 export function startBattleSequence(
   state: BattleState,
+  extensions?: BattleEngineExtensions,
 ): BattleTransitionResult {
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)
@@ -269,10 +381,22 @@ export function startBattleSequence(
     return stopBecauseNoEligibleUnits(nextState, sequence, [event])
   }
 
-  return advanceToNextLivingTurn(nextState, [event])
+  const advanced = advanceToNextLivingTurnStart(nextState, [event], extensions)
+  if (!advanced.ok) return failure(state, advanced.reason)
+  const automatic = runAutomaticActions(
+    advanced.state,
+    extensions,
+    state,
+  )
+  if (!automatic.ok) return automatic
+  return {
+    ok: true,
+    state: automatic.state,
+    events: [...advanced.events, ...automatic.events],
+  }
 }
 
-function endCurrentPersonalTurnInternal(
+function commitCurrentPersonalTurnEnd(
   state: BattleState,
   personalTurnId: PersonalTurnId,
   precedingEvents: readonly BattleEvent[] = [],
@@ -353,16 +477,29 @@ function endCurrentPersonalTurnInternal(
     },
   }
 
-  return advanceToNextLivingTurn(nextState, events)
+  return {
+    ok: true,
+    state: appendEvents(nextState, events),
+    events,
+  }
 }
 
 export function endCurrentPersonalTurn(
   state: BattleState,
   personalTurnId: PersonalTurnId,
+  extensions?: BattleEngineExtensions,
 ): BattleTransitionResult {
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)
-  return endCurrentPersonalTurnInternal(state, personalTurnId)
+  const committed = commitCurrentPersonalTurnEnd(state, personalTurnId)
+  if (!committed.ok) return committed
+  const continued = continueAfterCommittedTurn(committed.state, extensions)
+  if (!continued.ok) return continued
+  return {
+    ok: true,
+    state: continued.state,
+    events: [...committed.events, ...continued.events],
+  }
 }
 
 export function startBattleAction(
@@ -395,7 +532,7 @@ export function startBattleAction(
   }
 }
 
-export function completeBattleAction(
+export function completeCurrentBattleAction(
   state: BattleState,
   actionId: ActionId,
 ): BattleTransitionResult {
@@ -452,17 +589,40 @@ export function completeBattleAction(
   }
 
   if (action.endsTurn || !actorIsAlive) {
-    return endCurrentPersonalTurnInternal(
+    const ended = commitCurrentPersonalTurnEnd(
       nextState,
       result.turn.personalTurnId,
       result.events,
     )
+    return ended.ok ? ended : failure(state, ended.reason)
   }
 
   return {
     ok: true,
     state: appendEvents(nextState, result.events),
     events: result.events,
+  }
+}
+
+export function completeBattleAction(
+  state: BattleState,
+  actionId: ActionId,
+  extensions?: BattleEngineExtensions,
+): BattleTransitionResult {
+  const action = state.activeAction
+  const actor = action === null ? undefined : findUnit(state, action.actorId)
+  const shouldContinue = action !== null && (
+    action.endsTurn || actor === undefined || !isUnitAlive(actor)
+  )
+  const committed = completeCurrentBattleAction(state, actionId)
+  if (!committed.ok || !shouldContinue) return committed
+
+  const continued = continueAfterCommittedTurn(committed.state, extensions)
+  if (!continued.ok) return continued
+  return {
+    ok: true,
+    state: continued.state,
+    events: [...committed.events, ...continued.events],
   }
 }
 
@@ -492,6 +652,7 @@ function createTurnEndRequestedEvent(state: BattleState): BattleEvent | null {
 export function requestPlayerEndTurn(
   state: BattleState,
   request: EndTurnRequest,
+  extensions?: BattleEngineExtensions,
 ): EndTurnRequestResult {
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) {
@@ -537,15 +698,25 @@ export function requestPlayerEndTurn(
     }
   }
 
-  const result = endCurrentPersonalTurnInternal(
+  const committed = commitCurrentPersonalTurnEnd(
     state,
     turn.personalTurnId,
     requestEvents,
   )
-  if (!result.ok) {
+  if (!committed.ok) {
     return {
       status: 'invalid',
       state,
+      events: [],
+      reason: committed.reason,
+    }
+  }
+
+  const result = continueAfterCommittedTurn(committed.state, extensions)
+  if (!result.ok) {
+    return {
+      status: 'invalid',
+      state: result.state,
       events: [],
       reason: result.reason,
     }
@@ -554,6 +725,6 @@ export function requestPlayerEndTurn(
   return {
     status: 'turnEnded',
     state: result.state,
-    events: result.events,
+    events: [...committed.events, ...result.events],
   }
 }

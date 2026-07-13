@@ -9,6 +9,10 @@ import {
   startBattleAction,
   startBattleSequence,
 } from '../game/core/battleEngine'
+import type { BattleEngineExtensions } from '../game/core/battleEngine'
+import type { BattleState } from '../game/core/contexts'
+import { gainResource, ResourceType } from '../game/core/resources'
+import { gainShield } from '../game/core/shields'
 import { finishPersonalTurn } from '../game/core/turnLifecycle'
 import {
   createBattleState,
@@ -21,6 +25,91 @@ function actionId(value: string): ActionId {
 }
 
 describe('battle sequence engine', () => {
+  it('rolls back all UnitPassiveEffects hook changes when the hook fails', () => {
+    const initialState = createBattleState([createUnit('actor', {
+      momentum: 2,
+    })])
+    const failedHookStates: BattleState[] = []
+    const extensions: BattleEngineExtensions = {
+      applyUnitPassiveEffects(state, turn) {
+        const shield = gainShield(state, {
+          unitId: turn.unitId,
+          amount: 20,
+          reason: 'testFailingPassive',
+          personalTurnId: turn.personalTurnId,
+          sequenceId: turn.sequenceId,
+          skillExecutionId: null,
+        })
+        if (!shield.ok) return shield
+        const momentum = gainResource(shield.state, {
+          unitId: turn.unitId,
+          resourceType: ResourceType.Momentum,
+          amount: 5,
+          reason: 'testFailingPassive',
+          sourceId: null,
+          actionId: null,
+          personalTurnId: turn.personalTurnId,
+          sequenceId: turn.sequenceId,
+          skillExecutionId: null,
+          resourceTransactionId: null,
+        })
+        if (!momentum.ok) return momentum
+        const failedHookState: BattleState = {
+          ...momentum.state,
+          personalTurn: {
+            ...turn,
+            unitPassiveEffectsApplied: true,
+          },
+        }
+        failedHookStates.push(failedHookState)
+        return {
+          ok: false,
+          state: failedHookState,
+          events: [],
+          reason: 'TEST_UNIT_PASSIVE_EFFECTS_FAILURE',
+        }
+      },
+    }
+    const result = startBattleSequence(initialState, extensions)
+
+    expect(failedHookStates).toHaveLength(1)
+    const failedHookState = failedHookStates[0]
+    if (failedHookState === undefined) return
+    expect(failedHookState.units[0]).toMatchObject({ shield: 20, momentum: 7 })
+    expect(failedHookState.personalTurn).toMatchObject({
+      unitPassiveEffectsApplied: true,
+    })
+    expect(failedHookState.events.map((event) => event.type)).toEqual([
+      'SHIELD_GAINED',
+      'RESOURCE_GAINED',
+    ])
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('TEST_UNIT_PASSIVE_EFFECTS_FAILURE')
+    expect(result.state).toBe(initialState)
+    expect(result.state.units).toBe(initialState.units)
+    expect(result.state.events).toBe(initialState.events)
+    expect(result.state.rngState).toBe(initialState.rngState)
+    expect(result.state.units[0]).toMatchObject({
+      shield: 0,
+      momentum: 2,
+      currentHealth: 100,
+      alive: true,
+    })
+    expect(result.state.personalTurn).toBe(initialState.personalTurn)
+    expect(result.state.personalTurn?.unitPassiveEffectsApplied)
+      .toBe(initialState.personalTurn?.unitPassiveEffectsApplied)
+    expect(result.state.personalTurn?.phase)
+      .toBe(initialState.personalTurn?.phase)
+    expect(result.state.events.some((event) => (
+      event.type === 'SHIELD_GAINED'
+      || event.type === 'RESOURCE_GAINED'
+      || event.type === 'TURN_START_STAGE_ENTERED'
+      || event.type === 'TURN_START_STAGE_COMPLETED'
+    ))).toBe(false)
+    expect(result.state.phase).toBe(BattlePhase.Setup)
+  })
+
   it.each([
     0,
     -1,

@@ -135,6 +135,7 @@ export function createPersonalTurn(
     unitId,
     sequenceNumber: sequence.sequenceNumber,
     phase: PersonalTurnPhase.NotStarted,
+    unitPassiveEffectsApplied: false,
     startedActionIds: [],
     completedActionIds: [],
     countedActionCount: 0,
@@ -181,7 +182,11 @@ export function advanceTurnStartStage(
     case PersonalTurnPhase.StartingUnitPassives:
       return {
         ok: true,
-        turn: { ...turn, phase: PersonalTurnPhase.StartingStatusEffects },
+        turn: {
+          ...turn,
+          phase: PersonalTurnPhase.StartingStatusEffects,
+          unitPassiveEffectsApplied: true,
+        },
         events: [
           startStageCompletedEvent(turn, TurnStartStage.UnitPassives),
           startStageEnteredEvent(turn, TurnStartStage.StatusEffects),

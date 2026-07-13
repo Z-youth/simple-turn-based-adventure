@@ -6,7 +6,7 @@ import type {
   TriggerLockId,
   UnitId,
 } from './identifiers'
-import { calculateAddedShield } from './shields'
+import { gainShield } from './shields'
 import {
   validateBattleEntryBaseAttack,
   validateBattleStateUnits,
@@ -106,15 +106,6 @@ export function recalculateMomentumPressure(
   if (!Number.isSafeInteger(shieldGain)) {
     return failure(state, 'MOMENTUM_PRESSURE_SHIELD_OVERFLOW')
   }
-  const nextShield = shieldGain === 0
-    ? unit.shield
-    : calculateAddedShield(unit.shield, shieldGain)
-  if (typeof nextShield !== 'number') {
-    return failure(state, 'MOMENTUM_PRESSURE_SHIELD_OVERFLOW')
-  }
-  if (Math.abs(nextShield) > Number.MAX_SAFE_INTEGER) {
-    return failure(state, 'MOMENTUM_PRESSURE_SHIELD_OVERFLOW')
-  }
   const recalculatedEvent: BattleEvent = {
     type: 'MOMENTUM_PRESSURE_RECALCULATED',
     unitId: unit.id,
@@ -124,34 +115,34 @@ export function recalculateMomentumPressure(
     before: unit.momentumPressure,
     after: nextPressure,
   }
-  const shieldEvent: BattleEvent | null = shieldGain === 0
+  const pressureState: BattleState = {
+    ...state,
+    units: state.units.map((candidate) => candidate.id === unit.id
+      ? { ...candidate, momentumPressure: nextPressure }
+      : candidate),
+  }
+  const shieldResult = shieldGain === 0
     ? null
-    : {
-        type: 'SHIELD_GAINED',
+    : gainShield(pressureState, {
         unitId: unit.id,
         amount: shieldGain,
-        before: unit.shield,
-        after: nextShield,
         reason: 'momentumPressure',
         personalTurnId: turn.personalTurnId,
         sequenceId: turn.sequenceId,
         skillExecutionId: null,
-      }
-  const events = shieldEvent === null
+      })
+  if (shieldResult !== null && !shieldResult.ok) {
+    return failure(state, 'MOMENTUM_PRESSURE_SHIELD_OVERFLOW')
+  }
+  const events = shieldResult === null
     ? [recalculatedEvent]
-    : [recalculatedEvent, shieldEvent]
+    : [recalculatedEvent, ...shieldResult.events]
+  const nextState = shieldResult === null
+    ? pressureState
+    : { ...shieldResult.state, events: state.events }
   return {
     ok: true,
-    state: {
-      ...state,
-      units: state.units.map((candidate) => candidate.id === unit.id
-        ? {
-            ...candidate,
-            momentumPressure: nextPressure,
-            shield: nextShield,
-          }
-        : candidate),
-    },
+    state: nextState,
     events,
     changed: nextPressure !== unit.momentumPressure || shieldGain > 0,
   }

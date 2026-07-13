@@ -454,7 +454,7 @@ export function resolveSkillTransaction(
           ...target,
           shield: applied.remainingShield,
           currentHealth: applied.remainingHealth,
-          alive: applied.causedDeath ? false : target.alive,
+          alive: applied.alive,
         })
         const damage = createDamageEvent(
           request,
@@ -507,7 +507,7 @@ export function resolveSkillTransaction(
           units = replaceUnit(units, {
             ...currentTarget,
             currentHealth: extraApplied.remainingHealth,
-            alive: extraApplied.causedDeath ? false : currentTarget.alive,
+            alive: extraApplied.alive,
           })
           const extraDamage: DamageEvent = {
             eventId: targetRequest.extraDamage.damageEventId,
@@ -574,7 +574,7 @@ export function resolveSkillTransaction(
             units = replaceUnit(units, {
               ...currentTarget,
               currentHealth: pressureApplied.remainingHealth,
-              alive: pressureApplied.causedDeath ? false : currentTarget.alive,
+              alive: pressureApplied.alive,
             })
             const pressureDamage: DamageEvent = {
               eventId: pressureDamageEventId,
