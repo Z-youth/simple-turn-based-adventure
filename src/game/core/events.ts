@@ -4,7 +4,7 @@ import type {
   TurnEndStage,
   TurnStartStage,
 } from './enums'
-import type { AttackContext, DamageEvent } from './contexts'
+import type { AttackContext, DamageEvent, SkillContext } from './contexts'
 import type {
   ActionId,
   AttackId,
@@ -19,6 +19,7 @@ import type {
   ResourceTransactionId,
 } from './identifiers'
 import type { ResourceType } from './resources'
+import type { ModifierSourceId } from './units'
 
 interface SequenceEventBase {
   readonly sequenceId: TurnSequenceId
@@ -115,6 +116,7 @@ interface SkillResolutionEventBase {
 
 export interface SkillResolutionStartedEvent extends SkillResolutionEventBase {
   readonly type: 'SKILL_RESOLUTION_STARTED'
+  readonly context?: SkillContext
 }
 
 export interface SkillResolutionCompletedEvent extends SkillResolutionEventBase {
@@ -240,6 +242,16 @@ export interface ShieldGainedEvent {
   readonly skillExecutionId: SkillExecutionId | null
 }
 
+export interface TemporaryAttributeChangedEvent {
+  readonly type: 'TEMPORARY_ATTRIBUTE_CHANGED'
+  readonly skillExecutionId: SkillExecutionId
+  readonly unitId: UnitId
+  readonly attribute: 'attack'
+  readonly sourceId: ModifierSourceId
+  readonly value: number
+  readonly expiresAtTurnEnd: true
+}
+
 export type StatusChangeKind =
   | 'STATUS_ACQUIRED'
   | 'STATUS_BATCH_MERGED'
@@ -294,4 +306,5 @@ export type BattleEvent =
   | MomentumPressureClearedEvent
   | MomentumPressureTriggeredEvent
   | ShieldGainedEvent
+  | TemporaryAttributeChangedEvent
   | StatusChangedEvent

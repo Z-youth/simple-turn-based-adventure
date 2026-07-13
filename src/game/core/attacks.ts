@@ -4,12 +4,16 @@ import type {
   AttackId,
   DamageEventId,
   PersonalTurnId,
+  SkillBranchId,
   SkillExecutionId,
   SkillId,
   TriggerLockId,
   TurnSequenceId,
   UnitId,
 } from './identifiers'
+import type { ResourceType } from './resources'
+import type { StatusBatch } from './statuses'
+import type { ModifierSourceId } from './units'
 
 export interface ExtraDamageRequest {
   readonly damageEventId: DamageEventId
@@ -48,14 +52,60 @@ export interface ShieldValueAttackRequest extends AttackRequestBase {
 
 export type AttackRequest = NormalAttackRequest | ShieldValueAttackRequest
 
+export interface SkillResourceEffectRequest {
+  readonly kind: 'resource'
+  readonly operation: 'gain' | 'spend'
+  readonly unitId: UnitId
+  readonly resourceType: ResourceType
+  readonly amount: number
+  readonly reason: string
+  readonly sourceId?: string | null
+}
+
+export interface SkillStatusAddEffectRequest {
+  readonly kind: 'status'
+  readonly operation: 'add'
+  readonly status: StatusBatch
+}
+
+export interface SkillStatusRemoveEffectRequest {
+  readonly kind: 'status'
+  readonly operation: 'remove'
+  readonly ownerUnitId: UnitId
+  readonly mode: 'cleanse' | 'dispel'
+}
+
+export interface SkillTemporaryAttributeEffectRequest {
+  readonly kind: 'temporaryAttribute'
+  readonly attribute: 'attack'
+  readonly unitId: UnitId
+  readonly sourceId: ModifierSourceId
+  readonly value: number
+  readonly expiresAtTurnEnd: true
+}
+
+export interface SkillAttackEffectRequest {
+  readonly kind: 'attack'
+  readonly attack: AttackRequest
+}
+
+export type SkillEffectRequest =
+  | SkillResourceEffectRequest
+  | SkillStatusAddEffectRequest
+  | SkillStatusRemoveEffectRequest
+  | SkillTemporaryAttributeEffectRequest
+  | SkillAttackEffectRequest
+
 export interface SkillResolutionRequest {
   readonly skillExecutionId: SkillExecutionId
   readonly skillId: SkillId
+  readonly branchId?: SkillBranchId | null
   readonly actionId: ActionId
   readonly personalTurnId: PersonalTurnId
   readonly sequenceId: TurnSequenceId
   readonly casterId: UnitId
   readonly attacks: readonly AttackRequest[]
+  readonly effects?: readonly SkillEffectRequest[]
 }
 
 export function isSupportedAttackDamageType(

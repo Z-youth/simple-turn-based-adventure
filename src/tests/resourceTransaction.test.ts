@@ -11,6 +11,7 @@ import type {
   AttackId,
   DamageEventId,
   ResourceTransactionId,
+  SkillBranchId,
   SkillExecutionId,
   SkillId,
   StatusBatchId,
@@ -192,6 +193,96 @@ describe('resource payment lifecycle', () => {
     expect(result.state.completedResourcePayment).not.toBeNull()
     expect(result.state.completedSkillResolution).not.toBeNull()
     expect(result.state.rngState.cursor).toBe(resolving.rngState.cursor)
+  })
+
+  it('executes declared resource, status, temporary attribute, and attack effects in order', () => {
+    const { resolving } = setup()
+    const request = skill(resolving)
+    const attack = request.attacks[0]
+    const status = rollbackStatus()
+    const result = resolveResourcePaidSkillTransaction(
+      resolving,
+      payment(resolving, []),
+      {
+        ...request,
+        effects: [
+          {
+            kind: 'resource',
+            operation: 'gain',
+            unitId: unitId('actor'),
+            resourceType: ResourceType.Energy,
+            amount: 2,
+            reason: 'ordered-effect-test',
+          },
+          { kind: 'status', operation: 'add', status },
+          {
+            kind: 'temporaryAttribute',
+            attribute: 'attack',
+            unitId: unitId('actor'),
+            sourceId: skillId,
+            value: 2,
+            expiresAtTurnEnd: true,
+          },
+          { kind: 'attack', attack },
+        ],
+      },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const orderedMarkers = result.events.flatMap((event) => {
+      if (event.type === 'RESOURCE_GAINED') return ['resource']
+      if (event.type === 'STATUS_ACQUIRED') return ['status']
+      if (event.type === 'TEMPORARY_ATTRIBUTE_CHANGED') return ['temporary']
+      if (event.type === 'ATTACK_STARTED') return ['attack']
+      return []
+    })
+    expect(orderedMarkers).toEqual([
+      'resource',
+      'status',
+      'temporary',
+      'attack',
+    ])
+    expect(result.state.statusBatches).toEqual([status])
+    expect(result.state.units.find((unit) => unit.id === unitId('actor')))
+      .toMatchObject({
+        energy: 7,
+        attackModifiers: [{
+          sourceId: skillId,
+          value: 2,
+          expiresAtTurnEnd: true,
+        }],
+      })
+    expect(result.state.units.find((unit) => unit.id === unitId('target')))
+      .toMatchObject({ currentHealth: 90 })
+  })
+
+  it('records a selected branch in the active skill context', () => {
+    const { resolving } = setup()
+    const branchId = 'branch:ordered-effect' as SkillBranchId
+    const request = skill(resolving)
+    const result = resolveResourcePaidSkillTransaction(
+      resolving,
+      payment(resolving, []),
+      {
+        ...request,
+        branchId,
+        effects: [{ kind: 'attack', attack: request.attacks[0] }],
+      },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.events.find((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+    ))).toMatchObject({
+      context: {
+        skillExecutionId,
+        skillId,
+        branchId,
+        targetIds: [unitId('target')],
+      },
+    })
   })
 
   it('aggregates duplicate costs before paying in fixed resource order', () => {
@@ -412,6 +503,69 @@ describe('resource payment lifecycle', () => {
 })
 
 describe('payment and skill atomicity', () => {
+  it('rolls payment and every earlier ordered effect back when a middle effect fails', () => {
+    const initial = setup()
+    const rng = createFixedSequenceRandomState([0.25])
+    const awaiting = { ...initial.awaiting, rngState: rng }
+    const resolving = {
+      ...initial.resolving,
+      rngState: rng,
+      actionRollbackState: awaiting,
+    }
+    const request = skill(resolving, { criticalRate: 0.5 })
+    const result = resolveResourcePaidSkillTransaction(
+      resolving,
+      payment(resolving, [{ resourceType: ResourceType.Energy, amount: 1 }]),
+      {
+        ...request,
+        effects: [
+          {
+            kind: 'resource',
+            operation: 'gain',
+            unitId: unitId('actor'),
+            resourceType: ResourceType.Momentum,
+            amount: 2,
+            reason: 'ordered-effect-before-failure',
+          },
+          { kind: 'status', operation: 'add', status: rollbackStatus() },
+          {
+            kind: 'temporaryAttribute',
+            attribute: 'attack',
+            unitId: unitId('actor'),
+            sourceId: skillId,
+            value: 2,
+            expiresAtTurnEnd: true,
+          },
+          { kind: 'attack', attack: request.attacks[0] },
+          {
+            kind: 'resource',
+            operation: 'spend',
+            unitId: unitId('actor'),
+            resourceType: ResourceType.Energy,
+            amount: 999,
+            reason: 'ordered-effect-failure',
+          },
+        ],
+      },
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toBe('INSUFFICIENT_RESOURCE')
+    expect(result.state).toBe(awaiting)
+    expect(result.events).toEqual([])
+    expect(result.state.units).toBe(awaiting.units)
+    expect(result.state.statusBatches).toBe(awaiting.statusBatches)
+    expect(result.state.events).toBe(awaiting.events)
+    expect(result.state.rngState).toBe(rng)
+    expect(result.state.rngState.cursor).toBe(0)
+    expect(result.state.activeAction).toBeNull()
+    expect(result.state.personalTurn?.startedActionIds).toEqual([])
+    expect(result.state.resourcePaymentRegistry.resourceTransactionIds)
+      .toEqual([])
+    expect(result.state.resolutionIds.skillExecutionIds).toEqual([])
+  })
+
   it('restores existing status batches with the complete action snapshot', () => {
     const initial = setup()
     const existingStatus = rollbackStatus()

@@ -20,6 +20,7 @@ import type {
 import type {
   AttackRequest,
   AttackTargetRequest,
+  SkillEffectRequest,
   SkillResolutionRequest,
 } from './attacks'
 import {
@@ -44,7 +45,17 @@ import {
   validateBattleStateUnits,
   validateCombatUnit,
 } from './combatValidation'
-import { unitResourcesMatchConfiguration } from './resources'
+import type { ResourceErrorCode } from './resources'
+import {
+  gainResource,
+  spendResource,
+  unitResourcesMatchConfiguration,
+} from './resources'
+import type { StatusErrorCode } from './statusEngine'
+import {
+  addStatusToBattle,
+  removeBattleStatus,
+} from './statusEngine'
 import {
   createMomentumPressureDamageEventId,
   getMomentumPressureExtraDamage,
@@ -52,6 +63,8 @@ import {
 } from './momentumPressure'
 
 export type SkillResolutionErrorCode = CombatUnitValidationErrorCode
+  | ResourceErrorCode
+  | StatusErrorCode
   | 'NOT_AT_SKILL_RESOLUTION_BOUNDARY'
   | 'NO_ACTIVE_ACTION'
   | 'ACTIVE_SKILL_ALREADY_EXISTS'
@@ -73,6 +86,9 @@ export type SkillResolutionErrorCode = CombatUnitValidationErrorCode
   | 'INVALID_SHIELD_CALCULATION'
   | 'RANDOM_SOURCE_EXHAUSTED'
   | 'RESOURCE_PAYMENT_NOT_COMPLETED'
+  | 'TEMPORARY_ATTRIBUTE_OWNER_NOT_FOUND'
+  | 'TEMPORARY_ATTRIBUTE_OWNER_DEAD'
+  | 'INVALID_TEMPORARY_ATTRIBUTE_VALUE'
 
 export interface SkillResolutionSuccess {
   readonly ok: true
@@ -145,6 +161,23 @@ function collectDamageEventIds(
   }))
 }
 
+function orderedEffects(
+  request: SkillResolutionRequest,
+): readonly SkillEffectRequest[] {
+  return request.effects ?? request.attacks.map((attack) => ({
+    kind: 'attack' as const,
+    attack,
+  }))
+}
+
+function orderedAttacks(
+  request: SkillResolutionRequest,
+): readonly AttackRequest[] {
+  return orderedEffects(request).flatMap((effect) => (
+    effect.kind === 'attack' ? [effect.attack] : []
+  ))
+}
+
 function validateRequest(
   state: BattleState,
   request: SkillResolutionRequest,
@@ -198,20 +231,21 @@ function validateRequest(
     attacker,
     state.resourceConfiguration,
   )) return 'INVALID_UNIT_RESOURCE_STATE'
-  const attackIds = request.attacks.map((attack) => attack.attackId)
+  const attacks = orderedAttacks(request)
+  const attackIds = attacks.map((attack) => attack.attackId)
   if (duplicateValue(attackIds) || attackIds.some((attackId) => (
     state.resolutionIds.attackIds.includes(attackId)
   ))) return 'ATTACK_ID_ALREADY_USED'
 
   const damageEventIds = collectDamageEventIds(
-    request.attacks,
+    attacks,
     attacker.system === UnitSystem.Momentum && attacker.momentumPressure > 0,
   )
   if (duplicateValue(damageEventIds) || damageEventIds.some((damageEventId) => (
     state.resolutionIds.damageEventIds.includes(damageEventId)
   ))) return 'DAMAGE_EVENT_ID_ALREADY_USED'
 
-  for (const attack of request.attacks) {
+  for (const attack of attacks) {
     if (attack.damageType !== DamageType.Normal
       && attack.damageType !== DamageType.ShieldValue) {
       return 'INVALID_DAMAGE_TYPE'
@@ -336,15 +370,19 @@ export function resolveSkillTransaction(
   const invalid = validateRequest(state, request)
   if (invalid !== null) return failure(state, invalid)
 
+  const effects = orderedEffects(request)
+  const attacks = orderedAttacks(request)
   let units = state.units
+  let statusBatches = state.statusBatches
+  let statusAcquisitionOrders = state.statusAcquisitionOrders
   let rngState: RandomState = state.rngState
   let skillContext: SkillContext = {
     skillExecutionId: request.skillExecutionId,
     actionId: request.actionId,
     casterId: request.casterId,
     skillId: request.skillId,
-    branchId: null,
-    targetIds: uniqueTargetIds(request.attacks),
+    branchId: request.branchId ?? null,
+    targetIds: uniqueTargetIds(attacks),
     perTargetTriggerLocks: [],
     globalTriggerLocks: [],
   }
@@ -354,10 +392,95 @@ export function resolveSkillTransaction(
     actionId: request.actionId,
     skillId: request.skillId,
     casterId: request.casterId,
+    ...(skillContext.branchId === null ? {} : { context: skillContext }),
   }]
 
   try {
-    for (const [attackIndex, attack] of request.attacks.entries()) {
+    let attackIndex = 0
+    for (const effect of effects) {
+      const effectState = (): BattleState => ({
+        ...state,
+        units,
+        statusBatches,
+        statusAcquisitionOrders,
+        activeSkill: skillContext,
+        rngState,
+        events: [...state.events, ...events],
+      })
+
+      if (effect.kind === 'resource') {
+        const change = effect.operation === 'gain' ? gainResource : spendResource
+        const changed = change(effectState(), {
+          unitId: effect.unitId,
+          resourceType: effect.resourceType,
+          amount: effect.amount,
+          reason: effect.reason,
+          sourceId: effect.sourceId === undefined
+            ? String(request.skillId)
+            : effect.sourceId,
+          actionId: request.actionId,
+          personalTurnId: request.personalTurnId,
+          sequenceId: request.sequenceId,
+          skillExecutionId: request.skillExecutionId,
+          resourceTransactionId:
+            state.completedResourcePayment?.resourceTransactionId ?? null,
+        })
+        if (!changed.ok) return failure(state, changed.reason)
+        units = changed.state.units
+        events.push(...changed.events)
+        continue
+      }
+
+      if (effect.kind === 'status') {
+        const changed = effect.operation === 'add'
+          ? addStatusToBattle(effectState(), effect.status)
+          : removeBattleStatus(effectState(), {
+              ownerUnitId: effect.ownerUnitId,
+              mode: effect.mode,
+            })
+        if (!changed.ok) return failure(state, changed.reason)
+        statusBatches = changed.state.statusBatches
+        statusAcquisitionOrders = changed.state.statusAcquisitionOrders
+        events.push(...changed.events)
+        continue
+      }
+
+      if (effect.kind === 'temporaryAttribute') {
+        const owner = units.find((unit) => unit.id === effect.unitId)
+        if (owner === undefined) {
+          return failure(state, 'TEMPORARY_ATTRIBUTE_OWNER_NOT_FOUND')
+        }
+        if (!owner.alive
+          || (!owner.hasInfiniteHealth && owner.currentHealth <= 0)) {
+          return failure(state, 'TEMPORARY_ATTRIBUTE_OWNER_DEAD')
+        }
+        if (!Number.isFinite(effect.value)) {
+          return failure(state, 'INVALID_TEMPORARY_ATTRIBUTE_VALUE')
+        }
+        units = replaceUnit(units, {
+          ...owner,
+          attackModifiers: [
+            ...owner.attackModifiers,
+            {
+              sourceId: effect.sourceId,
+              value: effect.value,
+              expiresAtTurnEnd: effect.expiresAtTurnEnd,
+            },
+          ],
+        })
+        events.push({
+          type: 'TEMPORARY_ATTRIBUTE_CHANGED',
+          skillExecutionId: request.skillExecutionId,
+          unitId: effect.unitId,
+          attribute: effect.attribute,
+          sourceId: effect.sourceId,
+          value: effect.value,
+          expiresAtTurnEnd: effect.expiresAtTurnEnd,
+        })
+        continue
+      }
+
+      const attack = effect.attack
       const snapshot = createPositionProtectionSnapshot(
         units,
         attack.targets.map((target) => target.targetId),
@@ -622,6 +745,7 @@ export function resolveSkillTransaction(
         skillExecutionId: request.skillExecutionId,
         attackId: attack.attackId,
       })
+      attackIndex += 1
     }
   } catch (error) {
     if (error instanceof RangeError) {
@@ -640,6 +764,8 @@ export function resolveSkillTransaction(
   const nextState: BattleState = {
     ...state,
     units,
+    statusBatches,
+    statusAcquisitionOrders,
     activeSkill: null,
     completedSkillResolution: {
       skillExecutionId: request.skillExecutionId,
@@ -654,12 +780,12 @@ export function resolveSkillTransaction(
       ],
       attackIds: [
         ...state.resolutionIds.attackIds,
-        ...request.attacks.map((attack) => attack.attackId),
+        ...attacks.map((attack) => attack.attackId),
       ],
       damageEventIds: [
         ...state.resolutionIds.damageEventIds,
         ...collectDamageEventIds(
-          request.attacks,
+          attacks,
           state.units.some((unit) => (
             unit.id === request.casterId
             && unit.system === UnitSystem.Momentum
