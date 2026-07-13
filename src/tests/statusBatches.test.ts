@@ -26,14 +26,19 @@ function createBatch(
   return {
     batchId: batchId as StatusBatchId,
     statusId,
+    ownerUnitId: sourceUnitId,
     sourceUnitId,
     stacks,
     effect: { calculation: 'perStack', value: 2 },
     remainingOwnerTurns: 2,
     acquiredAt: StatusAcquisitionTiming.Action,
+    acquisitionGroupId: batchId,
+    acquisitionOrder: Number.parseInt(batchId.replace(/\D/g, ''), 10) || 0,
     skipNextTurnEndDecrement: false,
     stackPolicy: StackPolicy.Independent,
     category,
+    canBeCleansed: true,
+    canBeDispelled: true,
   }
 }
 

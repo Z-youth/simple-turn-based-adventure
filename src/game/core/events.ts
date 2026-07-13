@@ -1,11 +1,19 @@
 import type {
   ActionLifecycleStage,
+  StatusCategory,
   TurnEndStage,
   TurnStartStage,
 } from './enums'
+import type { AttackContext, DamageEvent } from './contexts'
 import type {
   ActionId,
+  AttackId,
+  DamageEventId,
   PersonalTurnId,
+  SkillExecutionId,
+  SkillId,
+  StatusBatchId,
+  StatusId,
   TurnSequenceId,
   UnitId,
 } from './identifiers'
@@ -96,6 +104,105 @@ export interface ActionCompletedEvent extends ActionEventBase {
   readonly countedActionCount: number
 }
 
+interface SkillResolutionEventBase {
+  readonly skillExecutionId: SkillExecutionId
+  readonly actionId: ActionId
+  readonly skillId: SkillId
+  readonly casterId: UnitId
+}
+
+export interface SkillResolutionStartedEvent extends SkillResolutionEventBase {
+  readonly type: 'SKILL_RESOLUTION_STARTED'
+}
+
+export interface SkillResolutionCompletedEvent extends SkillResolutionEventBase {
+  readonly type: 'SKILL_RESOLUTION_COMPLETED'
+}
+
+export interface AttackStartedEvent {
+  readonly type: 'ATTACK_STARTED'
+  readonly context: AttackContext
+}
+
+export interface CriticalRolledEvent {
+  readonly type: 'CRITICAL_ROLLED'
+  readonly skillExecutionId: SkillExecutionId
+  readonly attackId: AttackId
+  readonly targetId: UnitId
+  readonly originalRate: number
+  readonly probability: number
+  readonly critical: boolean
+  readonly rngConsumed: boolean
+}
+
+export interface DamageCalculatedEvent {
+  readonly type: 'DAMAGE_CALCULATED'
+  readonly damage: DamageEvent
+}
+
+export interface ShieldAbsorbedEvent {
+  readonly type: 'SHIELD_ABSORBED'
+  readonly skillExecutionId: SkillExecutionId
+  readonly attackId: AttackId
+  readonly damageEventId: DamageEventId
+  readonly targetId: UnitId
+  readonly amount: number
+  readonly remainingShield: number
+}
+
+export interface HealthLostEvent {
+  readonly type: 'HEALTH_LOST'
+  readonly skillExecutionId: SkillExecutionId
+  readonly attackId: AttackId
+  readonly damageEventId: DamageEventId
+  readonly targetId: UnitId
+  readonly amount: number
+  readonly remainingHealth: number
+  readonly targetWasAlreadyDead: boolean
+}
+
+export interface UnitDiedEvent {
+  readonly type: 'UNIT_DIED'
+  readonly skillExecutionId: SkillExecutionId
+  readonly attackId: AttackId
+  readonly damageEventId: DamageEventId
+  readonly unitId: UnitId
+}
+
+export interface ExtraDamageAppliedEvent {
+  readonly type: 'EXTRA_DAMAGE_APPLIED'
+  readonly damage: DamageEvent
+}
+
+export interface AttackCompletedEvent {
+  readonly type: 'ATTACK_COMPLETED'
+  readonly skillExecutionId: SkillExecutionId
+  readonly attackId: AttackId
+}
+
+export type StatusChangeKind =
+  | 'STATUS_ACQUIRED'
+  | 'STATUS_BATCH_MERGED'
+  | 'STATUS_DURATION_REFRESHED'
+  | 'STATUS_BATCH_REPLACED'
+  | 'STATUS_REJECTED'
+  | 'STATUS_STACK_REMOVED'
+  | 'STATUS_BATCH_REMOVED'
+  | 'STATUS_DURATION_DECREMENTED'
+  | 'STATUS_CLEANSED'
+  | 'STATUS_DISPELLED'
+
+export interface StatusChangedEvent {
+  readonly type: StatusChangeKind
+  readonly ownerUnitId: UnitId
+  readonly statusId: StatusId
+  readonly category: StatusCategory
+  readonly batchId: StatusBatchId
+  readonly previousBatchId: StatusBatchId | null
+  readonly stacks: number
+  readonly remainingOwnerTurns: number | null
+}
+
 export type BattleEvent =
   | SequenceStartedEvent
   | SequenceCompletedEvent
@@ -112,3 +219,14 @@ export type BattleEvent =
   | ActionStartedEvent
   | ActionStageReachedEvent
   | ActionCompletedEvent
+  | SkillResolutionStartedEvent
+  | SkillResolutionCompletedEvent
+  | AttackStartedEvent
+  | CriticalRolledEvent
+  | DamageCalculatedEvent
+  | ShieldAbsorbedEvent
+  | HealthLostEvent
+  | UnitDiedEvent
+  | ExtraDamageAppliedEvent
+  | AttackCompletedEvent
+  | StatusChangedEvent

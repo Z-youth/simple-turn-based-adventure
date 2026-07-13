@@ -16,14 +16,19 @@ export type StatusEffectValue =
 export interface StatusBatch {
   readonly batchId: StatusBatchId
   readonly statusId: StatusId
+  readonly ownerUnitId: UnitId
   readonly sourceUnitId: UnitId
   readonly stacks: number
   readonly effect: StatusEffectValue
   readonly remainingOwnerTurns: number | null
   readonly acquiredAt: StatusAcquisitionTiming
+  readonly acquisitionGroupId: string
+  readonly acquisitionOrder: number
   readonly skipNextTurnEndDecrement: boolean
   readonly stackPolicy: StackPolicy
   readonly category: StatusCategory
+  readonly canBeCleansed: boolean
+  readonly canBeDispelled: boolean
 }
 
 export function aggregateStatusStacks(

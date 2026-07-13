@@ -1,4 +1,9 @@
-import { Camp, BattlePhase, PersonalTurnPhase } from './enums'
+import {
+  Camp,
+  BattlePhase,
+  PersonalTurnPhase,
+  TurnEndStage,
+} from './enums'
 import { EndTurnConfirmation } from './commands'
 import type { EndTurnRequest } from './commands'
 import type { BattleState, TurnSequenceState } from './contexts'
@@ -15,6 +20,10 @@ import { beginAction, finishAction } from './actionLifecycle'
 import { createTurnQueue } from './turnOrder'
 import { isUnitAlive } from './unitQueries'
 import { finishPersonalTurn, startPersonalTurn } from './turnLifecycle'
+import type { SkillResolutionRequest } from './attacks'
+import type { SkillResolutionResult } from './resolutionTransaction'
+import { resolveSkillTransaction } from './resolutionTransaction'
+import { advanceBattleStatusDurations } from './statusEngine'
 
 export interface BattleTransitionSuccess {
   readonly ok: true
@@ -245,7 +254,28 @@ function endCurrentPersonalTurnInternal(
   const turnResult = finishPersonalTurn(turn, actorIsAlive)
   if (!turnResult.ok) return failure(state, turnResult.reason)
 
-  const events = [...precedingEvents, ...turnResult.events]
+  const durationResult = actorIsAlive
+    ? advanceBattleStatusDurations(state, turn.unitId)
+    : {
+      ok: true as const,
+      state,
+      events: [] as const,
+      changed: false,
+    }
+  if (!durationResult.ok) return failure(state, durationResult.reason)
+  const durationStageIndex = turnResult.events.findIndex((event) => (
+    event.type === 'TURN_END_STAGE_ENTERED'
+    && event.stage === TurnEndStage.StatusDurations
+  ))
+  const lifecycleEvents = durationStageIndex < 0
+    ? turnResult.events
+    : [
+      ...turnResult.events.slice(0, durationStageIndex + 1),
+      ...durationResult.events,
+      ...turnResult.events.slice(durationStageIndex + 1),
+    ]
+
+  const events = [...precedingEvents, ...lifecycleEvents]
   const nextState: BattleState = {
     ...state,
     phase: BattlePhase.TurnEnd,
@@ -254,6 +284,7 @@ function endCurrentPersonalTurnInternal(
       ...sequence,
       currentIndex: sequence.currentIndex + 1,
     },
+    statusBatches: durationResult.state.statusBatches,
   }
 
   return advanceToNextLivingTurn(nextState, events)
@@ -282,6 +313,7 @@ export function startBattleAction(
     phase: BattlePhase.ResolvingAction,
     personalTurn: result.turn,
     activeAction: result.action,
+    completedSkillResolution: null,
   }
 
   return {
@@ -300,6 +332,24 @@ export function completeBattleAction(
   }
 
   const action = state.activeAction
+  if (state.activeSkill !== null) {
+    return failure(state, 'SKILL_RESOLUTION_STILL_ACTIVE')
+  }
+  if (action.skillExecutionId !== null) {
+    const completion = state.completedSkillResolution
+    if (
+      completion === null
+      || completion.skillExecutionId !== action.skillExecutionId
+      || completion.actionId !== action.actionId
+      || completion.personalTurnId !== action.personalTurnId
+      || completion.sequenceId !== action.sequenceId
+      || !state.resolutionIds.skillExecutionIds.includes(
+        action.skillExecutionId,
+      )
+    ) {
+      return failure(state, 'SKILL_RESOLUTION_NOT_COMPLETED')
+    }
+  }
   const result = finishAction(state.personalTurn, action, actionId)
   if (!result.ok) return failure(state, result.reason)
 
@@ -312,6 +362,7 @@ export function completeBattleAction(
       : BattlePhase.AwaitingAction,
     personalTurn: result.turn,
     activeAction: null,
+    completedSkillResolution: null,
   }
 
   if (action.endsTurn || !actorIsAlive) {
@@ -327,6 +378,13 @@ export function completeBattleAction(
     state: appendEvents(nextState, result.events),
     events: result.events,
   }
+}
+
+export function resolveBattleSkill(
+  state: BattleState,
+  request: SkillResolutionRequest,
+): SkillResolutionResult {
+  return resolveSkillTransaction(state, request)
 }
 
 function createTurnEndRequestedEvent(state: BattleState): BattleEvent | null {

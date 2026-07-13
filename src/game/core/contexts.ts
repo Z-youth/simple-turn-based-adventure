@@ -20,6 +20,7 @@ import type {
 } from './identifiers'
 import type { StatusBatch } from './statuses'
 import type { UnitState } from './units'
+import type { RandomState } from './rng'
 
 export interface TurnQueueEntry {
   readonly unitId: UnitId
@@ -55,6 +56,19 @@ export interface ActionContext {
   readonly endsTurn: boolean
 }
 
+export interface SkillResolutionCompletion {
+  readonly skillExecutionId: SkillExecutionId
+  readonly actionId: ActionId
+  readonly personalTurnId: PersonalTurnId
+  readonly sequenceId: TurnSequenceId
+}
+
+export interface ResolutionIdRegistry {
+  readonly skillExecutionIds: readonly SkillExecutionId[]
+  readonly attackIds: readonly AttackId[]
+  readonly damageEventIds: readonly DamageEventId[]
+}
+
 export interface PerTargetTriggerLock {
   readonly lockId: TriggerLockId
   readonly triggeredTargetIds: readonly UnitId[]
@@ -75,9 +89,24 @@ export interface AttackContext {
   readonly attackId: AttackId
   readonly skillExecutionId: SkillExecutionId
   readonly attackerId: UnitId
-  readonly targetId: UnitId
   readonly attackIndex: number
+  readonly damageType: DamageType
+  readonly targetIds: readonly UnitId[]
+  readonly targets: readonly AttackTargetContext[]
+  readonly protectionSnapshot: readonly PositionProtectionSnapshotEntry[]
+}
+
+export interface AttackTargetContext {
+  readonly targetId: UnitId
+  readonly damageEventId: DamageEventId
   readonly hit: boolean
+  readonly lockedAtSkillStart: boolean
+}
+
+export interface PositionProtectionSnapshotEntry {
+  readonly targetId: UnitId
+  readonly protectedByUnitId: UnitId | null
+  readonly reduction: number
 }
 
 export interface DamageEvent {
@@ -89,6 +118,13 @@ export interface DamageEvent {
   readonly damageType: DamageType
   readonly rawValue: number
   readonly resolvedValue: number
+  readonly critical: boolean
+  readonly shieldAbsorbed: number
+  readonly healthLost: number
+  readonly remainingShield: number
+  readonly remainingHealth: number
+  readonly causedDeath: boolean
+  readonly targetWasAlreadyDead: boolean
 }
 
 export interface BattleLogEvent {
@@ -104,10 +140,14 @@ export interface BattleState {
   readonly phase: BattlePhase
   readonly units: readonly UnitState[]
   readonly statusBatches: readonly StatusBatch[]
+  readonly statusAcquisitionOrders: readonly number[]
   readonly turnSequence: TurnSequenceState | null
   readonly personalTurn: PersonalTurnState | null
   readonly activeAction: ActionContext | null
   readonly activeSkill: SkillContext | null
+  readonly completedSkillResolution: SkillResolutionCompletion | null
+  readonly resolutionIds: ResolutionIdRegistry
+  readonly rngState: RandomState
   readonly log: readonly BattleLogEvent[]
   readonly events: readonly BattleEvent[]
 }
