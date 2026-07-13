@@ -6,6 +6,7 @@ import {
 import { EndTurnConfirmation } from './commands'
 import type { EndTurnRequest } from './commands'
 import type {
+  ActionContext,
   BattleState,
   PersonalTurnState,
   TurnSequenceState,
@@ -59,6 +60,10 @@ export interface BattleEngineExtensions {
   readonly applyUnitPassiveEffects?: (
     state: BattleState,
     turn: PersonalTurnState,
+  ) => BattleTransitionResult
+  readonly applyAfterActionEffects?: (
+    state: BattleState,
+    action: ActionContext,
   ) => BattleTransitionResult
   readonly runAutomaticAction?: (
     state: BattleState,
@@ -535,6 +540,7 @@ export function startBattleAction(
 export function completeCurrentBattleAction(
   state: BattleState,
   actionId: ActionId,
+  extensions?: BattleEngineExtensions,
 ): BattleTransitionResult {
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)
@@ -574,33 +580,82 @@ export function completeCurrentBattleAction(
   const result = finishAction(state.personalTurn, action, actionId, state.units)
   if (!result.ok) return failure(state, result.reason)
 
-  const actor = findUnit(state, action.actorId)
-  const actorIsAlive = actor !== undefined && isUnitAlive(actor)
-  const nextState: BattleState = {
+  const rollbackState = state.actionRollbackState ?? state
+  const completedTurn: PersonalTurnState = {
+    ...result.turn,
+    phase: PersonalTurnPhase.AwaitingAction,
+  }
+  const completedState = appendEvents({
     ...state,
-    phase: action.endsTurn || !actorIsAlive
-      ? BattlePhase.TurnEnd
-      : BattlePhase.AwaitingAction,
-    personalTurn: result.turn,
+    phase: BattlePhase.AwaitingAction,
+    personalTurn: completedTurn,
     activeAction: null,
     completedSkillResolution: null,
     completedResourcePayment: null,
-    actionRollbackState: null,
+  }, result.events)
+  const afterAction = extensions?.applyAfterActionEffects?.(
+    completedState,
+    action,
+  )
+  if (afterAction !== undefined && !afterAction.ok) {
+    return failure(rollbackState, afterAction.reason)
   }
 
-  if (action.endsTurn || !actorIsAlive) {
+  let afterActionState = completedState
+  let afterActionEvents: readonly BattleEvent[] = []
+  if (afterAction !== undefined) {
+    const afterActionTurn = afterAction.state.personalTurn
+    if (
+      afterActionTurn === null
+      || afterActionTurn.personalTurnId !== completedTurn.personalTurnId
+      || afterActionTurn.phase !== PersonalTurnPhase.AwaitingAction
+      || afterAction.state.activeAction !== null
+    ) return failure(rollbackState, 'AFTER_ACTION_EFFECTS_INVALID_TURN')
+    afterActionEvents = afterAction.events
+    afterActionState = appendEvents({
+      ...afterAction.state,
+      events: completedState.events,
+    }, afterActionEvents)
+  }
+
+  const finalTurn = afterActionState.personalTurn
+  if (
+    finalTurn === null
+    || finalTurn.personalTurnId !== completedTurn.personalTurnId
+    || finalTurn.phase !== PersonalTurnPhase.AwaitingAction
+    || afterActionState.activeAction !== null
+  ) return failure(rollbackState, 'AFTER_ACTION_EFFECTS_INVALID_TURN')
+
+  const actor = findUnit(afterActionState, action.actorId)
+  const actorIsAlive = actor !== undefined && isUnitAlive(actor)
+  const shouldEndTurn = action.endsTurn || !actorIsAlive
+  const nextState: BattleState = {
+    ...afterActionState,
+    phase: shouldEndTurn ? BattlePhase.TurnEnd : BattlePhase.AwaitingAction,
+    personalTurn: shouldEndTurn
+      ? { ...finalTurn, phase: PersonalTurnPhase.Ending }
+      : finalTurn,
+    actionRollbackState: null,
+  }
+  const actionEvents = [...result.events, ...afterActionEvents]
+
+  if (shouldEndTurn) {
     const ended = commitCurrentPersonalTurnEnd(
       nextState,
-      result.turn.personalTurnId,
-      result.events,
+      completedTurn.personalTurnId,
     )
-    return ended.ok ? ended : failure(state, ended.reason)
+    if (!ended.ok) return failure(rollbackState, ended.reason)
+    return {
+      ok: true,
+      state: ended.state,
+      events: [...actionEvents, ...ended.events],
+    }
   }
 
   return {
     ok: true,
-    state: appendEvents(nextState, result.events),
-    events: result.events,
+    state: nextState,
+    events: actionEvents,
   }
 }
 
@@ -609,13 +664,11 @@ export function completeBattleAction(
   actionId: ActionId,
   extensions?: BattleEngineExtensions,
 ): BattleTransitionResult {
-  const action = state.activeAction
-  const actor = action === null ? undefined : findUnit(state, action.actorId)
-  const shouldContinue = action !== null && (
-    action.endsTurn || actor === undefined || !isUnitAlive(actor)
-  )
-  const committed = completeCurrentBattleAction(state, actionId)
-  if (!committed.ok || !shouldContinue) return committed
+  const committed = completeCurrentBattleAction(state, actionId, extensions)
+  if (!committed.ok) return committed
+  if (committed.state.personalTurn?.phase !== PersonalTurnPhase.Ended) {
+    return committed
+  }
 
   const continued = continueAfterCommittedTurn(committed.state, extensions)
   if (!continued.ok) return continued

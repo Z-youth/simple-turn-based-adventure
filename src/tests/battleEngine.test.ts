@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { BattlePhase, Camp, Position } from '../game/core/enums'
 import { EndTurnConfirmation } from '../game/core/commands'
-import type { ActionId } from '../game/core/identifiers'
+import type {
+  ActionId,
+  ResourceTransactionId,
+  SkillExecutionId,
+  SkillId,
+} from '../game/core/identifiers'
 import {
   completeBattleAction,
   endCurrentPersonalTurn,
@@ -11,6 +16,11 @@ import {
 } from '../game/core/battleEngine'
 import type { BattleEngineExtensions } from '../game/core/battleEngine'
 import type { BattleState } from '../game/core/contexts'
+import {
+  createFixedSequenceRandomState,
+  readRandomValue,
+} from '../game/core/rng'
+import { resolveResourcePaidSkillTransaction } from '../game/core/resourceTransaction'
 import { gainResource, ResourceType } from '../game/core/resources'
 import { gainShield } from '../game/core/shields'
 import { finishPersonalTurn } from '../game/core/turnLifecycle'
@@ -343,6 +353,269 @@ describe('battle sequence engine', () => {
 })
 
 describe('battle action engine', () => {
+  it('preserves the default completion behavior without extensions', () => {
+    const started = startBattleSequence(createBattleState([
+      createUnit('first', { speed: 120, position: Position.Front1 }),
+      createUnit('second', { speed: 100, position: Position.Front2 }),
+    ]))
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    const actionStarted = startBattleAction(started.state, {
+      actionId: actionId('default-behavior'),
+      actorId: unitId('first'),
+    })
+    expect(actionStarted.ok).toBe(true)
+    if (!actionStarted.ok) return
+
+    const withoutExtensions = completeBattleAction(
+      actionStarted.state,
+      actionId('default-behavior'),
+    )
+    const withEmptyExtensions = completeBattleAction(
+      actionStarted.state,
+      actionId('default-behavior'),
+      {},
+    )
+
+    expect(withEmptyExtensions).toEqual(withoutExtensions)
+  })
+
+  it('applies after-action effects once per non-ending action in the same turn', () => {
+    const started = startBattleSequence(createBattleState([createUnit('actor')]))
+    expect(started.ok).toBe(true)
+    if (!started.ok || started.state.personalTurn === null) return
+    const originalTurnId = started.state.personalTurn.personalTurnId
+    const hookActionIds: ActionId[] = []
+    const extensions: BattleEngineExtensions = {
+      applyAfterActionEffects(state, action) {
+        hookActionIds.push(action.actionId)
+        return gainResource(state, {
+          unitId: action.actorId,
+          resourceType: ResourceType.Momentum,
+          amount: 1,
+          reason: 'testAfterAction',
+          sourceId: null,
+          actionId: action.actionId,
+          personalTurnId: action.personalTurnId,
+          sequenceId: action.sequenceId,
+          skillExecutionId: action.skillExecutionId,
+          resourceTransactionId: null,
+        })
+      },
+    }
+
+    const firstStarted = startBattleAction(started.state, {
+      actionId: actionId('first-after-action'),
+      actorId: unitId('actor'),
+      endsTurn: false,
+    })
+    expect(firstStarted.ok).toBe(true)
+    if (!firstStarted.ok) return
+    const firstCompleted = completeBattleAction(
+      firstStarted.state,
+      actionId('first-after-action'),
+      extensions,
+    )
+    expect(firstCompleted.ok).toBe(true)
+    if (!firstCompleted.ok) return
+
+    const secondStarted = startBattleAction(firstCompleted.state, {
+      actionId: actionId('second-after-action'),
+      actorId: unitId('actor'),
+      endsTurn: false,
+    })
+    expect(secondStarted.ok).toBe(true)
+    if (!secondStarted.ok) return
+    const secondCompleted = completeBattleAction(
+      secondStarted.state,
+      actionId('second-after-action'),
+      extensions,
+    )
+
+    expect(secondCompleted.ok).toBe(true)
+    if (!secondCompleted.ok) return
+    expect(hookActionIds).toEqual([
+      actionId('first-after-action'),
+      actionId('second-after-action'),
+    ])
+    expect(secondCompleted.state.personalTurn).toMatchObject({
+      personalTurnId: originalTurnId,
+      unitId: unitId('actor'),
+      unitPassiveEffectsApplied: true,
+      countedActionCount: 2,
+    })
+    expect(secondCompleted.state.units[0]).toMatchObject({ momentum: 2 })
+    expect(secondCompleted.state.events.filter((event) => (
+      event.type === 'TURN_STARTED'
+    ))).toHaveLength(1)
+    expect(secondCompleted.state.events.filter((event) => (
+      event.type === 'MOMENTUM_PRESSURE_RECALCULATED'
+    ))).toHaveLength(1)
+  })
+
+  it('applies after-action effects before ending an ending action turn', () => {
+    const started = startBattleSequence(createBattleState([
+      createUnit('first', { speed: 120, position: Position.Front1 }),
+      createUnit('second', { speed: 100, position: Position.Front2 }),
+    ]))
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    const actionStarted = startBattleAction(started.state, {
+      actionId: actionId('ending-after-action'),
+      actorId: unitId('first'),
+      endsTurn: true,
+    })
+    expect(actionStarted.ok).toBe(true)
+    if (!actionStarted.ok) return
+    const completed = completeBattleAction(
+      actionStarted.state,
+      actionId('ending-after-action'),
+      {
+        applyAfterActionEffects(state, action) {
+          return gainShield(state, {
+            unitId: action.actorId,
+            amount: 7,
+            reason: 'testAfterActionBeforeTurnEnd',
+            personalTurnId: action.personalTurnId,
+            sequenceId: action.sequenceId,
+            skillExecutionId: action.skillExecutionId,
+          })
+        },
+      },
+    )
+
+    expect(completed.ok).toBe(true)
+    if (!completed.ok) return
+    const actionCompletedIndex = completed.events.findIndex((event) => (
+      event.type === 'ACTION_COMPLETED'
+    ))
+    const hookIndex = completed.events.findIndex((event) => (
+      event.type === 'SHIELD_GAINED'
+      && event.reason === 'testAfterActionBeforeTurnEnd'
+    ))
+    const turnEndIndex = completed.events.findIndex((event) => (
+      event.type === 'TURN_END_STAGE_ENTERED'
+    ))
+    expect(actionCompletedIndex).toBeLessThan(hookIndex)
+    expect(hookIndex).toBeLessThan(turnEndIndex)
+    expect(completed.state.units.find((unit) => unit.id === unitId('first')))
+      .toMatchObject({ shield: 7 })
+    expect(completed.state.personalTurn?.unitId).toBe(unitId('second'))
+  })
+
+  it('rolls a failed after-action hook back to the paid action snapshot', () => {
+    const initial = {
+      ...createBattleState([createUnit('actor', { energy: 5 })]),
+      rngState: createFixedSequenceRandomState([0.25]),
+    }
+    const started = startBattleSequence(initial)
+    expect(started.ok).toBe(true)
+    if (!started.ok || started.state.personalTurn === null) return
+    const actionSnapshot = started.state
+    const paidActionId = actionId('paid-after-action-failure')
+    const skillExecutionId = (
+      'skill-execution:after-action-failure' as SkillExecutionId
+    )
+    const actionStarted = startBattleAction(started.state, {
+      actionId: paidActionId,
+      actorId: unitId('actor'),
+      skillExecutionId,
+      endsTurn: false,
+    })
+    expect(actionStarted.ok).toBe(true)
+    if (!actionStarted.ok || actionStarted.state.personalTurn === null
+      || actionStarted.state.activeAction === null) return
+    const resolved = resolveResourcePaidSkillTransaction(
+      actionStarted.state,
+      {
+        resourceTransactionId: (
+          'resource:after-action-failure' as ResourceTransactionId
+        ),
+        actionId: paidActionId,
+        personalTurnId: actionStarted.state.personalTurn.personalTurnId,
+        sequenceId: actionStarted.state.activeAction.sequenceId,
+        skillExecutionId,
+        payerUnitId: unitId('actor'),
+        costs: [{ resourceType: ResourceType.Energy, amount: 2 }],
+      },
+      {
+        skillExecutionId,
+        skillId: 'skill:test-after-action-failure' as SkillId,
+        actionId: paidActionId,
+        personalTurnId: actionStarted.state.personalTurn.personalTurnId,
+        sequenceId: actionStarted.state.activeAction.sequenceId,
+        casterId: unitId('actor'),
+        attacks: [],
+      },
+    )
+    expect(resolved.ok).toBe(true)
+    if (!resolved.ok) return
+    expect(resolved.state.actionRollbackState).toBe(actionSnapshot)
+
+    const failed = completeBattleAction(
+      resolved.state,
+      paidActionId,
+      {
+        applyAfterActionEffects(state, action) {
+          const random = readRandomValue(state.rngState)
+          const shield = gainShield({ ...state, rngState: random.state }, {
+            unitId: action.actorId,
+            amount: 9,
+            reason: 'testFailingAfterAction',
+            personalTurnId: action.personalTurnId,
+            sequenceId: action.sequenceId,
+            skillExecutionId: action.skillExecutionId,
+          })
+          if (!shield.ok) return shield
+          const momentum = gainResource(shield.state, {
+            unitId: action.actorId,
+            resourceType: ResourceType.Momentum,
+            amount: 4,
+            reason: 'testFailingAfterAction',
+            sourceId: null,
+            actionId: action.actionId,
+            personalTurnId: action.personalTurnId,
+            sequenceId: action.sequenceId,
+            skillExecutionId: action.skillExecutionId,
+            resourceTransactionId: null,
+          })
+          if (!momentum.ok) return momentum
+          return {
+            ok: false,
+            state: momentum.state,
+            events: [],
+            reason: 'TEST_AFTER_ACTION_EFFECTS_FAILURE',
+          }
+        },
+      },
+    )
+
+    expect(failed.ok).toBe(false)
+    if (failed.ok) return
+    expect(failed.reason).toBe('TEST_AFTER_ACTION_EFFECTS_FAILURE')
+    expect(failed.state).toBe(actionSnapshot)
+    expect(failed.events).toEqual([])
+    expect(failed.state.units).toBe(actionSnapshot.units)
+    expect(failed.state.events).toBe(actionSnapshot.events)
+    expect(failed.state.rngState).toBe(actionSnapshot.rngState)
+    expect(failed.state.resourcePaymentRegistry)
+      .toBe(actionSnapshot.resourcePaymentRegistry)
+    expect(failed.state.resolutionIds).toBe(actionSnapshot.resolutionIds)
+    expect(failed.state.personalTurn).toBe(actionSnapshot.personalTurn)
+    expect(failed.state.personalTurn).toMatchObject({
+      startedActionIds: [],
+      completedActionIds: [],
+      countedActionCount: 0,
+    })
+    expect(failed.state.activeAction).toBeNull()
+    expect(failed.state.actionRollbackState).toBeNull()
+    expect(failed.state.units[0]).toMatchObject({
+      energy: 5,
+      momentum: 0,
+      shield: 0,
+    })
+  })
+
   it('ends the turn after a normal action and records one counted action', () => {
     const started = startBattleSequence(createBattleState([
       createUnit('first', { speed: 120, position: Position.Front1 }),

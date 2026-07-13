@@ -289,7 +289,7 @@ export function resolveResourcePaidSkillTransaction(
   }
   return {
     ok: true,
-    state: { ...resolved.state, actionRollbackState: null },
+    state: resolved.state,
     events: [...prepared.events, ...resolved.events],
   }
 }
