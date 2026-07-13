@@ -224,7 +224,7 @@ describe('resource payment lifecycle', () => {
             unitId: unitId('actor'),
             sourceId: skillId,
             value: 2,
-            expiresAtTurnEnd: true,
+            duration: { kind: 'currentPersonalTurn' },
           },
           { kind: 'attack', attack },
         ],
@@ -250,10 +250,14 @@ describe('resource payment lifecycle', () => {
     expect(result.state.units.find((unit) => unit.id === unitId('actor')))
       .toMatchObject({
         energy: 7,
-        attackModifiers: [{
+        temporaryAttributeModifiers: [{
           sourceId: skillId,
+          attribute: 'attack',
           value: 2,
-          expiresAtTurnEnd: true,
+          duration: {
+            kind: 'currentPersonalTurn',
+            personalTurnId: resolving.personalTurn?.personalTurnId,
+          },
         }],
       })
     expect(result.state.units.find((unit) => unit.id === unitId('target')))
@@ -567,7 +571,7 @@ describe('payment and skill atomicity', () => {
             unitId: unitId('actor'),
             sourceId: skillId,
             value: 2,
-            expiresAtTurnEnd: true,
+            duration: { kind: 'currentPersonalTurn' },
           },
           {
             kind: 'specialCounter',
@@ -596,6 +600,10 @@ describe('payment and skill atomicity', () => {
     expect(result.events).toEqual([])
     expect(result.state.units).toBe(awaiting.units)
     expect(readSpecialCounter(result.state.units[0], specialCounterId)).toBe(0)
+    expect(result.state.units[0].temporaryAttributeModifiers).toEqual([])
+    expect(result.state.events.some((event) => (
+      event.type === 'TEMPORARY_ATTRIBUTE_CHANGED'
+    ))).toBe(false)
     expect(result.state.statusBatches).toBe(awaiting.statusBatches)
     expect(result.state.events).toBe(awaiting.events)
     expect(result.state.rngState).toBe(rng)

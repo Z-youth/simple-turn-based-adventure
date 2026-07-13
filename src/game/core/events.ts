@@ -274,12 +274,18 @@ export interface ShieldGainedEvent {
 
 export interface TemporaryAttributeChangedEvent {
   readonly type: 'TEMPORARY_ATTRIBUTE_CHANGED'
-  readonly skillExecutionId: SkillExecutionId
+  readonly operation: 'applied' | 'durationDecremented' | 'removed'
   readonly unitId: UnitId
-  readonly attribute: 'attack'
+  readonly attribute: 'attack' | 'criticalRate' | 'criticalDamage'
   readonly sourceId: ModifierSourceId
   readonly value: number
-  readonly expiresAtTurnEnd: true
+  readonly durationKind: 'currentPersonalTurn' | 'ownerTurns'
+  readonly remainingOwnerTurns: number | null
+  readonly expiresAtPersonalTurnId: PersonalTurnId | null
+  readonly actionId: ActionId | null
+  readonly personalTurnId: PersonalTurnId | null
+  readonly sequenceId: TurnSequenceId | null
+  readonly skillExecutionId: SkillExecutionId | null
 }
 
 export type StatusChangeKind =

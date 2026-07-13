@@ -29,7 +29,12 @@ import {
 import { resolveResourcePaidSkillTransaction } from '../../core/resourceTransaction'
 import { gainResource, ResourceType } from '../../core/resources'
 import { gainShield } from '../../core/shields'
-import { getEffectiveAttack, isUnitAlive } from '../../core/unitQueries'
+import {
+  getEffectiveAttack,
+  getEffectiveCriticalDamage,
+  getEffectiveCriticalRate,
+  isUnitAlive,
+} from '../../core/unitQueries'
 import type { UnitState } from '../../core/units'
 
 export const TRAINING_DUMMY_UNIT_ID = 'boss:training-dummy' as UnitId
@@ -168,8 +173,8 @@ function createRevengeAttack(
     effectiveAttack: getEffectiveAttack(dummy),
     multiplier: 1,
     fixedDamage: 0,
-    criticalRate: dummy.criticalRate,
-    criticalDamage: dummy.criticalDamage,
+    criticalRate: getEffectiveCriticalRate(dummy),
+    criticalDamage: getEffectiveCriticalDamage(dummy),
     normalDamageIncrease: dummy.normalDamageIncrease,
     targets: [{
       targetId: targetUnitId,
@@ -191,7 +196,7 @@ export function createTrainingDummy(): UnitState {
     maximumHealth: 1,
     hasInfiniteHealth: true,
     baseAttackAtBattleEntry: 5,
-    attackModifiers: [],
+    temporaryAttributeModifiers: [],
     speed: 1,
     shield: 0,
     criticalRate: 0,

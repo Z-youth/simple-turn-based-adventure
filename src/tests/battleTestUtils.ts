@@ -25,7 +25,7 @@ export function createUnit(
     maximumHealth: 100,
     hasInfiniteHealth: false,
     baseAttackAtBattleEntry: 10,
-    attackModifiers: [],
+    temporaryAttributeModifiers: [],
     speed: 100,
     shield: 0,
     criticalRate: 0,

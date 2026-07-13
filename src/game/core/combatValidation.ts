@@ -1,6 +1,7 @@
 import type { BattleState } from './contexts'
 import type { UnitState } from './units'
 import { validateSpecialCounters } from './specialCounters'
+import { validateTemporaryAttributeModifiers } from './temporaryModifiers'
 
 export type CombatUnitValidationErrorCode =
   | 'INVALID_UNIT_NUMERIC_STATE'
@@ -9,6 +10,7 @@ export type CombatUnitValidationErrorCode =
   | 'INVALID_UNIT_SHIELD'
   | 'INVALID_UNIT_RESOURCE_STATE'
   | 'INVALID_SPECIAL_COUNTER_STATE'
+  | 'INVALID_TEMPORARY_MODIFIER_STATE'
 
 function allFinite(values: readonly number[]): boolean {
   return values.every(Number.isFinite)
@@ -44,6 +46,9 @@ export function validateCombatUnit(
 ): CombatUnitValidationErrorCode | null {
   const invalidBaseAttack = validateBattleEntryBaseAttack(unit)
   if (invalidBaseAttack !== null) return invalidBaseAttack
+  if (validateTemporaryAttributeModifiers(unit) !== null) {
+    return 'INVALID_TEMPORARY_MODIFIER_STATE'
+  }
   if (!allFinite([
     unit.currentHealth,
     unit.maximumHealth,
@@ -55,7 +60,7 @@ export function validateCombatUnit(
     unit.normalDamageIncrease,
     unit.extraDamageIncrease,
     unit.extraDamageReduction,
-    ...unit.attackModifiers.map((modifier) => modifier.value),
+    ...unit.temporaryAttributeModifiers.map((modifier) => modifier.value),
     ...unit.normalDamageReductionSources.map((source) => source.reduction),
   ])) {
     return 'INVALID_UNIT_NUMERIC_STATE'

@@ -27,7 +27,7 @@ function createUnit(overrides: Partial<UnitState> = {}): UnitState {
     maximumHealth: 100,
     hasInfiniteHealth: false,
     baseAttackAtBattleEntry: 20,
-    attackModifiers: [],
+    temporaryAttributeModifiers: [],
     speed: 100,
     shield: 0,
     criticalRate: 0,
@@ -68,10 +68,11 @@ describe('unit attack queries', () => {
   it('does not let a temporary attack buff raise the momentum cap', () => {
     const unit = createUnit({
       momentum: 100,
-      attackModifiers: [{
+      temporaryAttributeModifiers: [{
         sourceId: 'temporary-buff' as SkillId,
+        attribute: 'attack',
         value: 50,
-        expiresAtTurnEnd: true,
+        duration: { kind: 'ownerTurns', remainingTurns: 1 },
       }],
     })
 

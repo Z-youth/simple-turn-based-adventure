@@ -15,6 +15,10 @@ import type {
 import type { ResourceType } from './resources'
 import type { StatusBatch } from './statuses'
 import type { ModifierSourceId } from './units'
+import type {
+  TemporaryAttribute,
+  TemporaryModifierDurationRequest,
+} from './temporaryModifiers'
 
 export interface ExtraDamageRequest {
   readonly damageEventId: DamageEventId
@@ -78,11 +82,11 @@ export interface SkillStatusRemoveEffectRequest {
 
 export interface SkillTemporaryAttributeEffectRequest {
   readonly kind: 'temporaryAttribute'
-  readonly attribute: 'attack'
+  readonly attribute: TemporaryAttribute
   readonly unitId: UnitId
   readonly sourceId: ModifierSourceId
   readonly value: number
-  readonly expiresAtTurnEnd: true
+  readonly duration: TemporaryModifierDurationRequest
 }
 
 export interface SkillSpecialCounterEffectRequest {

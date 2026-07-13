@@ -61,6 +61,8 @@ import {
   decreaseSpecialCounter,
   increaseSpecialCounter,
 } from './specialCounters'
+import type { TemporaryModifierErrorCode } from './temporaryModifiers'
+import { applyTemporaryAttributeModifier } from './temporaryModifiers'
 import {
   createMomentumPressureDamageEventId,
   getMomentumPressureExtraDamage,
@@ -71,6 +73,7 @@ export type SkillResolutionErrorCode = CombatUnitValidationErrorCode
   | ResourceErrorCode
   | StatusErrorCode
   | SpecialCounterErrorCode
+  | TemporaryModifierErrorCode
   | 'NOT_AT_SKILL_RESOLUTION_BOUNDARY'
   | 'NO_ACTIVE_ACTION'
   | 'ACTIVE_SKILL_ALREADY_EXISTS'
@@ -92,9 +95,6 @@ export type SkillResolutionErrorCode = CombatUnitValidationErrorCode
   | 'INVALID_SHIELD_CALCULATION'
   | 'RANDOM_SOURCE_EXHAUSTED'
   | 'RESOURCE_PAYMENT_NOT_COMPLETED'
-  | 'TEMPORARY_ATTRIBUTE_OWNER_NOT_FOUND'
-  | 'TEMPORARY_ATTRIBUTE_OWNER_DEAD'
-  | 'INVALID_TEMPORARY_ATTRIBUTE_VALUE'
 
 export interface SkillResolutionSuccess {
   readonly ok: true
@@ -471,37 +471,20 @@ export function resolveSkillTransaction(
       }
 
       if (effect.kind === 'temporaryAttribute') {
-        const owner = units.find((unit) => unit.id === effect.unitId)
-        if (owner === undefined) {
-          return failure(state, 'TEMPORARY_ATTRIBUTE_OWNER_NOT_FOUND')
-        }
-        if (!owner.alive
-          || (!owner.hasInfiniteHealth && owner.currentHealth <= 0)) {
-          return failure(state, 'TEMPORARY_ATTRIBUTE_OWNER_DEAD')
-        }
-        if (!Number.isFinite(effect.value)) {
-          return failure(state, 'INVALID_TEMPORARY_ATTRIBUTE_VALUE')
-        }
-        units = replaceUnit(units, {
-          ...owner,
-          attackModifiers: [
-            ...owner.attackModifiers,
-            {
-              sourceId: effect.sourceId,
-              value: effect.value,
-              expiresAtTurnEnd: effect.expiresAtTurnEnd,
-            },
-          ],
-        })
-        events.push({
-          type: 'TEMPORARY_ATTRIBUTE_CHANGED',
-          skillExecutionId: request.skillExecutionId,
+        const changed = applyTemporaryAttributeModifier(effectState(), {
           unitId: effect.unitId,
-          attribute: effect.attribute,
           sourceId: effect.sourceId,
+          attribute: effect.attribute,
           value: effect.value,
-          expiresAtTurnEnd: effect.expiresAtTurnEnd,
+          duration: effect.duration,
+          actionId: request.actionId,
+          personalTurnId: request.personalTurnId,
+          sequenceId: request.sequenceId,
+          skillExecutionId: request.skillExecutionId,
         })
+        if (!changed.ok) return failure(state, changed.reason)
+        units = changed.state.units
+        events.push(...changed.events)
         continue
       }
 

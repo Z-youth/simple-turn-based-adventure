@@ -4,14 +4,9 @@ import type {
   ResourceReductionProtection,
   SpecialCounter,
 } from './specialCounters'
+import type { TemporaryAttributeModifier } from './temporaryModifiers'
 
 export type ModifierSourceId = SkillId | StatusId | UnitId
-
-export interface AttackModifier {
-  readonly sourceId: ModifierSourceId
-  readonly value: number
-  readonly expiresAtTurnEnd: boolean
-}
 
 export interface NormalDamageReductionSource {
   readonly sourceId: ModifierSourceId
@@ -30,7 +25,7 @@ export interface UnitState {
   readonly maximumHealth: number
   readonly hasInfiniteHealth: boolean
   readonly baseAttackAtBattleEntry: number
-  readonly attackModifiers: readonly AttackModifier[]
+  readonly temporaryAttributeModifiers: readonly TemporaryAttributeModifier[]
   readonly speed: number
   readonly shield: number
   readonly criticalRate: number

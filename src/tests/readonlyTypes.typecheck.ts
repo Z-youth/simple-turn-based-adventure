@@ -21,6 +21,7 @@ import type {
   ResourceReductionProtection,
   SpecialCounter,
 } from '../game/core/specialCounters'
+import type { TemporaryAttributeModifier } from '../game/core/temporaryModifiers'
 import type { RandomState } from '../game/core/rng'
 import type {
   ResourceChangeRequest,
@@ -56,6 +57,7 @@ declare const resourceTransactionId: ResourceTransactionId
 declare const resourcePaymentRequest: ResourcePaymentRequest
 declare const specialCounter: SpecialCounter
 declare const resourceReductionProtection: ResourceReductionProtection
+declare const temporaryAttributeModifier: TemporaryAttributeModifier
 
 // @ts-expect-error Core battle phase is changed only through transitions.
 battleState.phase = BattlePhase.AwaitingAction
@@ -105,6 +107,10 @@ unit.specialCounters.push(specialCounter)
 specialCounter.value = 1
 // @ts-expect-error Resource protection configuration is immutable.
 unit.resourceReductionProtections.push(resourceReductionProtection)
+// @ts-expect-error Temporary modifiers cannot be appended externally.
+unit.temporaryAttributeModifiers.push(temporaryAttributeModifier)
+// @ts-expect-error Temporary modifier values change only through controlled transitions.
+temporaryAttributeModifier.value = 2
 // @ts-expect-error Status batches cannot be appended externally.
 battleState.statusBatches.push(statusBatch)
 // @ts-expect-error Status acquisition history cannot be extended externally.

@@ -1,6 +1,10 @@
 import { Position } from './enums'
 import type { UnitState } from './units'
 import { clampMinimum, clampProbabilityForRoll } from './rounding'
+import {
+  TemporaryAttribute,
+  type TemporaryAttribute as TemporaryAttributeValue,
+} from './temporaryModifiers'
 
 export function isUnitAlive(unit: UnitState): boolean {
   return unit.alive && (unit.hasInfiniteHealth || unit.currentHealth > 0)
@@ -23,14 +27,37 @@ export function getMomentumAttackBonus(
 }
 
 export function getEffectiveAttack(unit: UnitState): number {
-  const modifierTotal = unit.attackModifiers.reduce(
-    (total, modifier) => total + modifier.value,
+  return getEffectiveAttribute(unit, TemporaryAttribute.Attack)
+}
+
+export function getEffectiveCriticalRate(unit: UnitState): number {
+  return getEffectiveAttribute(unit, TemporaryAttribute.CriticalRate)
+}
+
+export function getEffectiveCriticalDamage(unit: UnitState): number {
+  return getEffectiveAttribute(unit, TemporaryAttribute.CriticalDamage)
+}
+
+export function getEffectiveAttribute(
+  unit: UnitState,
+  attribute: TemporaryAttributeValue,
+): number {
+  const modifierTotal = unit.temporaryAttributeModifiers.reduce(
+    (total, modifier) => (
+      modifier.attribute === attribute ? total + modifier.value : total
+    ),
     0,
   )
-
-  return unit.baseAttackAtBattleEntry
-    + getMomentumAttackBonus(unit.baseAttackAtBattleEntry, unit.momentum)
-    + modifierTotal
+  switch (attribute) {
+    case TemporaryAttribute.Attack:
+      return unit.baseAttackAtBattleEntry
+        + getMomentumAttackBonus(unit.baseAttackAtBattleEntry, unit.momentum)
+        + modifierTotal
+    case TemporaryAttribute.CriticalRate:
+      return unit.criticalRate + modifierTotal
+    case TemporaryAttribute.CriticalDamage:
+      return unit.criticalDamage + modifierTotal
+  }
 }
 
 export interface CriticalProbabilitySummary {

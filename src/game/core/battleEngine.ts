@@ -38,6 +38,7 @@ import {
   recalculateMomentumPressure,
 } from './momentumPressure'
 import { validateBattleStateUnits } from './combatValidation'
+import { advanceTemporaryAttributeModifiers } from './temporaryModifiers'
 
 export interface BattleTransitionSuccess {
   readonly ok: true
@@ -504,6 +505,21 @@ function commitCurrentPersonalTurnEnd(
           events: turnState.events,
         }
         events.push(...durationResult.events)
+      }
+      if (endingTurn.phase === PersonalTurnPhase.EndingTemporaryModifiers) {
+        const modifierResult = advanceTemporaryAttributeModifiers(
+          turnState,
+          turn.unitId,
+          turn.personalTurnId,
+        )
+        if (!modifierResult.ok) {
+          return failure(rollbackState, modifierResult.reason)
+        }
+        turnState = {
+          ...modifierResult.state,
+          events: turnState.events,
+        }
+        events.push(...modifierResult.events)
       }
     }
   }
