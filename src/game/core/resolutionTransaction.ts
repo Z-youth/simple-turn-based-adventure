@@ -95,6 +95,9 @@ export type SkillResolutionErrorCode = CombatUnitValidationErrorCode
   | 'INVALID_SHIELD_CALCULATION'
   | 'RANDOM_SOURCE_EXHAUSTED'
   | 'RESOURCE_PAYMENT_NOT_COMPLETED'
+  | 'NOT_AT_TRIGGERED_SKILL_RESOLUTION_BOUNDARY'
+  | 'TRIGGERED_SKILL_ACTION_NOT_COMPLETED'
+  | 'TRIGGERED_SKILL_ROLLBACK_STATE_MISSING'
 
 export interface SkillResolutionSuccess {
   readonly ok: true
@@ -184,49 +187,10 @@ function orderedAttacks(
   ))
 }
 
-function validateRequest(
+function validateResolutionPayload(
   state: BattleState,
   request: SkillResolutionRequest,
 ): SkillResolutionErrorCode | null {
-  if (
-    state.phase !== BattlePhase.ResolvingAction
-    || state.personalTurn?.phase !== PersonalTurnPhase.ResolvingAction
-  ) return 'NOT_AT_SKILL_RESOLUTION_BOUNDARY'
-  if (state.activeAction === null) return 'NO_ACTIVE_ACTION'
-  if (state.activeAction.stage !== ActionLifecycleStage.SkillResolution) {
-    return 'RESOURCE_PAYMENT_NOT_COMPLETED'
-  }
-  if (state.activeSkill !== null) return 'ACTIVE_SKILL_ALREADY_EXISTS'
-  if (state.completedSkillResolution !== null) {
-    return 'SKILL_EXECUTION_ID_ALREADY_USED'
-  }
-  if (state.activeAction.actionId !== request.actionId) return 'ACTION_ID_MISMATCH'
-  if (state.personalTurn.personalTurnId !== request.personalTurnId) {
-    return 'PERSONAL_TURN_ID_MISMATCH'
-  }
-  if (state.activeAction.sequenceId !== request.sequenceId) {
-    return 'SEQUENCE_ID_MISMATCH'
-  }
-  if (state.activeAction.actorId !== request.casterId) return 'CASTER_ID_MISMATCH'
-  if (state.activeAction.skillExecutionId !== request.skillExecutionId) {
-    return 'SKILL_EXECUTION_ID_MISMATCH'
-  }
-  const payment = state.completedResourcePayment
-  if (
-    payment === null
-    || payment.skillExecutionId !== request.skillExecutionId
-    || payment.actionId !== request.actionId
-    || payment.personalTurnId !== request.personalTurnId
-    || payment.sequenceId !== request.sequenceId
-    || payment.payerUnitId !== request.casterId
-    || !state.resourcePaymentRegistry.paidSkillExecutionIds.includes(
-      request.skillExecutionId,
-    )
-  ) return 'RESOURCE_PAYMENT_NOT_COMPLETED'
-  if (state.resolutionIds.skillExecutionIds.includes(request.skillExecutionId)) {
-    return 'SKILL_EXECUTION_ID_ALREADY_USED'
-  }
-
   if (validateRandomState(state.rngState) !== null) return 'INVALID_RANDOM_STATE'
 
   const attacker = state.units.find((unit) => unit.id === request.casterId)
@@ -274,6 +238,83 @@ function validateRequest(
     }
   }
   return null
+}
+
+function validateRequest(
+  state: BattleState,
+  request: SkillResolutionRequest,
+): SkillResolutionErrorCode | null {
+  if (
+    state.phase !== BattlePhase.ResolvingAction
+    || state.personalTurn?.phase !== PersonalTurnPhase.ResolvingAction
+  ) return 'NOT_AT_SKILL_RESOLUTION_BOUNDARY'
+  if (state.activeAction === null) return 'NO_ACTIVE_ACTION'
+  if (state.activeAction.stage !== ActionLifecycleStage.SkillResolution) {
+    return 'RESOURCE_PAYMENT_NOT_COMPLETED'
+  }
+  if (state.activeSkill !== null) return 'ACTIVE_SKILL_ALREADY_EXISTS'
+  if (state.completedSkillResolution !== null) {
+    return 'SKILL_EXECUTION_ID_ALREADY_USED'
+  }
+  if (state.activeAction.actionId !== request.actionId) return 'ACTION_ID_MISMATCH'
+  if (state.personalTurn.personalTurnId !== request.personalTurnId) {
+    return 'PERSONAL_TURN_ID_MISMATCH'
+  }
+  if (state.activeAction.sequenceId !== request.sequenceId) {
+    return 'SEQUENCE_ID_MISMATCH'
+  }
+  if (state.activeAction.actorId !== request.casterId) return 'CASTER_ID_MISMATCH'
+  if (state.activeAction.skillExecutionId !== request.skillExecutionId) {
+    return 'SKILL_EXECUTION_ID_MISMATCH'
+  }
+  const payment = state.completedResourcePayment
+  if (
+    payment === null
+    || payment.skillExecutionId !== request.skillExecutionId
+    || payment.actionId !== request.actionId
+    || payment.personalTurnId !== request.personalTurnId
+    || payment.sequenceId !== request.sequenceId
+    || payment.payerUnitId !== request.casterId
+    || !state.resourcePaymentRegistry.paidSkillExecutionIds.includes(
+      request.skillExecutionId,
+    )
+  ) return 'RESOURCE_PAYMENT_NOT_COMPLETED'
+  if (state.resolutionIds.skillExecutionIds.includes(request.skillExecutionId)) {
+    return 'SKILL_EXECUTION_ID_ALREADY_USED'
+  }
+  return validateResolutionPayload(state, request)
+}
+
+function validateTriggeredRequest(
+  state: BattleState,
+  request: SkillResolutionRequest,
+): SkillResolutionErrorCode | null {
+  const turn = state.personalTurn
+  if (
+    state.phase !== BattlePhase.AwaitingAction
+    || turn === null
+    || turn.phase !== PersonalTurnPhase.AwaitingAction
+    || state.activeAction !== null
+  ) return 'NOT_AT_TRIGGERED_SKILL_RESOLUTION_BOUNDARY'
+  if (state.activeSkill !== null) return 'ACTIVE_SKILL_ALREADY_EXISTS'
+  if (state.completedSkillResolution !== null) {
+    return 'SKILL_EXECUTION_ID_ALREADY_USED'
+  }
+  if (state.actionRollbackState === null) {
+    return 'TRIGGERED_SKILL_ROLLBACK_STATE_MISSING'
+  }
+  if (!turn.completedActionIds.includes(request.actionId)) {
+    return 'TRIGGERED_SKILL_ACTION_NOT_COMPLETED'
+  }
+  if (turn.personalTurnId !== request.personalTurnId) {
+    return 'PERSONAL_TURN_ID_MISMATCH'
+  }
+  if (turn.sequenceId !== request.sequenceId) return 'SEQUENCE_ID_MISMATCH'
+  if (turn.unitId !== request.casterId) return 'CASTER_ID_MISMATCH'
+  if (state.resolutionIds.skillExecutionIds.includes(request.skillExecutionId)) {
+    return 'SKILL_EXECUTION_ID_ALREADY_USED'
+  }
+  return validateResolutionPayload(state, request)
 }
 
 function replaceUnit(
@@ -367,13 +408,16 @@ function uniqueTargetIds(attacks: readonly AttackRequest[]): readonly UnitId[] {
   return result
 }
 
-export function resolveSkillTransaction(
+function resolveSkillTransactionInternal(
   state: BattleState,
   request: SkillResolutionRequest,
+  triggered: boolean,
 ): SkillResolutionResult {
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)
-  const invalid = validateRequest(state, request)
+  const invalid = triggered
+    ? validateTriggeredRequest(state, request)
+    : validateRequest(state, request)
   if (invalid !== null) return failure(state, invalid)
 
   const effects = orderedEffects(request)
@@ -775,12 +819,14 @@ export function resolveSkillTransaction(
     statusBatches,
     statusAcquisitionOrders,
     activeSkill: null,
-    completedSkillResolution: {
-      skillExecutionId: request.skillExecutionId,
-      actionId: request.actionId,
-      personalTurnId: request.personalTurnId,
-      sequenceId: request.sequenceId,
-    },
+    completedSkillResolution: triggered
+      ? state.completedSkillResolution
+      : {
+          skillExecutionId: request.skillExecutionId,
+          actionId: request.actionId,
+          personalTurnId: request.personalTurnId,
+          sequenceId: request.sequenceId,
+        },
     resolutionIds: {
       skillExecutionIds: [
         ...state.resolutionIds.skillExecutionIds,
@@ -806,4 +852,18 @@ export function resolveSkillTransaction(
     events: [...state.events, ...events],
   }
   return { ok: true, state: nextState, events }
+}
+
+export function resolveSkillTransaction(
+  state: BattleState,
+  request: SkillResolutionRequest,
+): SkillResolutionResult {
+  return resolveSkillTransactionInternal(state, request, false)
+}
+
+export function resolveTriggeredSkillTransaction(
+  state: BattleState,
+  request: SkillResolutionRequest,
+): SkillResolutionResult {
+  return resolveSkillTransactionInternal(state, request, true)
 }

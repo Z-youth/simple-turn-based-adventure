@@ -7,6 +7,7 @@ import type {
   SkillBranchId,
   SkillExecutionId,
   SkillId,
+  SpecialCounterId,
   StatusBatchId,
   StatusId,
 } from '../game/core/identifiers'
@@ -44,6 +45,7 @@ import {
   useWangDahaiFirstSkill,
   WANG_DAHAI_BATTLE_EXTENSIONS,
   WANG_DAHAI_FIRST_SKILL_ID,
+  WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID,
   WANG_DAHAI_NEW_TIDE_BRANCH_ID,
   WANG_DAHAI_STACKING_WAVE_BRANCH_ID,
   WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
@@ -105,6 +107,35 @@ function setupFirstSkill(
       }),
     ],
   })
+}
+
+function setupMyriadRivers(
+  wangOverrides: Partial<UnitState> = {},
+  enemies: readonly UnitState[] = [
+    createUnit('other', { camp: Camp.Enemy, speed: 1 }),
+  ],
+  stateOverrides: Partial<BattleState> = {},
+): BattleState {
+  return setup(wangOverrides, {
+    ...stateOverrides,
+    units: [wang({ speed: 200, ...wangOverrides }), ...enemies],
+  })
+}
+
+function completePlainWangAction(
+  state: BattleState,
+  name: string,
+  extensions: BattleEngineExtensions = WANG_DAHAI_BATTLE_EXTENSIONS,
+) {
+  const actionId = `action:${name}` as ActionId
+  const started = startBattleAction(state, {
+    actionId,
+    actorId: WANG_DAHAI_UNIT_ID,
+    countsAsAction: true,
+    endsTurn: false,
+  })
+  if (!started.ok) throw new Error(`Could not start ${name}: ${started.reason}`)
+  return completeBattleAction(started.state, actionId, extensions)
 }
 
 function finishAction(
@@ -520,7 +551,7 @@ describe('Wang Dahai first skill branches', () => {
     const wangUnit = state.units.find((unit) => unit.id === WANG_DAHAI_UNIT_ID)
     expect(gains).toEqual([2, 4, 6, 6])
     expect(wangUnit && getWangDahaiStackingWaveUseCount(wangUnit)).toBe(4)
-    expect(wangUnit).toMatchObject({ energy: 1, momentum: 22 })
+    expect(wangUnit).toMatchObject({ energy: 1, momentum: 2 })
     expect(state.personalTurn?.countedActionCount).toBe(4)
   })
 
@@ -736,6 +767,237 @@ describe('Wang Dahai first skill lethal and pressure behavior', () => {
     expect(result.events.filter((event) => (
       event.type === 'UNIT_DIED' && event.unitId === request.targetUnitId
     ))).toHaveLength(1)
+  })
+})
+
+describe('Wang Dahai automatic Myriad Rivers', () => {
+  it('does not trigger below ten momentum', () => {
+    const awaiting = setupMyriadRivers({ momentum: 9 })
+    const completed = completePlainWangAction(awaiting, 'myriad-below-threshold')
+
+    expect(completed.ok).toBe(true)
+    if (!completed.ok) return
+    expect(completed.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))?.momentum).toBe(9)
+    expect(completed.state.units.find((unit) => unit.id === unitId('other')))
+      .toMatchObject({ currentHealth: 100 })
+    expect(completed.events.some((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+      && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+    ))).toBe(false)
+  })
+
+  it('hits all living enemies once at ten momentum and then reduces ten momentum', () => {
+    const awaiting = setupMyriadRivers({ momentum: 10 })
+    const completed = completePlainWangAction(awaiting, 'myriad-threshold')
+
+    expect(completed.ok).toBe(true)
+    if (!completed.ok) return
+    expect(completed.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))).toMatchObject({ energy: 0, momentum: 0 })
+    expect(completed.state.units.find((unit) => unit.id === unitId('other')))
+      .toMatchObject({ currentHealth: 70 })
+    expect(completed.events.filter((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+      && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+    ))).toHaveLength(1)
+    const damageIndex = completed.events.findIndex((event) => (
+      event.type === 'DAMAGE_CALCULATED'
+    ))
+    const reductionIndex = completed.events.findIndex((event) => (
+      event.type === 'RESOURCE_SPENT'
+      && event.reason === 'wangDahaiMyriadRivers'
+    ))
+    expect(damageIndex).toBeLessThan(reductionIndex)
+    expect(completed.state.completedSkillResolution).toBeNull()
+  })
+
+  it('rolls critical RNG independently for every living enemy', () => {
+    const rng = createFixedSequenceRandomState([0.1, 0.9])
+    const awaiting = setupMyriadRivers(
+      { momentum: 10, criticalRate: 0.5 },
+      [
+        createUnit('enemy-one', { camp: Camp.Enemy, speed: 2 }),
+        createUnit('enemy-two', { camp: Camp.Enemy, speed: 1 }),
+      ],
+      { rngState: rng },
+    )
+    const completed = completePlainWangAction(awaiting, 'myriad-multi-target')
+
+    expect(completed.ok).toBe(true)
+    if (!completed.ok) return
+    expect(completed.state.units.find((unit) => unit.id === unitId('enemy-one')))
+      .toMatchObject({ currentHealth: 55 })
+    expect(completed.state.units.find((unit) => unit.id === unitId('enemy-two')))
+      .toMatchObject({ currentHealth: 70 })
+    expect(completed.events.flatMap((event) => (
+      event.type === 'CRITICAL_ROLLED' ? [event.critical] : []
+    ))).toEqual([true, false])
+    expect(completed.state.rngState.cursor).toBe(2)
+    expect(completed.events.filter((event) => (
+      event.type === 'DAMAGE_CALCULATED'
+    ))).toHaveLength(2)
+  })
+
+  it('does not create an action, retrigger Rising Momentum, or recurse after action', () => {
+    const awaiting = setupMyriadRivers(
+      { momentum: 10, energy: 1 },
+      [createUnit('other', {
+        camp: Camp.Enemy,
+        speed: 1,
+        currentHealth: 500,
+        maximumHealth: 500,
+      })],
+    )
+    const result = useWangDahaiFirstSkill(
+      awaiting,
+      firstSkillRequest('myriad-no-action', WANG_DAHAI_STACKING_WAVE_BRANCH_ID),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.events.filter((event) => event.type === 'ACTION_STARTED'))
+      .toHaveLength(1)
+    expect(result.events.filter((event) => event.type === 'ACTION_COMPLETED'))
+      .toHaveLength(1)
+    expect(result.events.filter((event) => (
+      event.type === 'RESOURCE_GAINED'
+      && event.reason === 'wangDahaiRisingMomentum'
+    ))).toHaveLength(1)
+    expect(result.events.filter((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+      && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+    ))).toHaveLength(1)
+    expect(result.state.personalTurn?.countedActionCount).toBe(1)
+  })
+
+  it('can trigger once after each consecutive Stacking Wave action', () => {
+    let state = setupMyriadRivers(
+      { momentum: 20, energy: 2 },
+      [createUnit('other', {
+        camp: Camp.Enemy,
+        speed: 1,
+        currentHealth: 1000,
+        maximumHealth: 1000,
+      })],
+    )
+    for (let use = 1; use <= 2; use += 1) {
+      const result = useWangDahaiFirstSkill(
+        state,
+        firstSkillRequest(
+          `myriad-consecutive-${use}`,
+          WANG_DAHAI_STACKING_WAVE_BRANCH_ID,
+        ),
+      )
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.events.filter((event) => (
+        event.type === 'SKILL_RESOLUTION_STARTED'
+        && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+      ))).toHaveLength(1)
+      state = result.state
+    }
+
+    expect(state.events.filter((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+      && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+    ))).toHaveLength(2)
+    expect(state.personalTurn?.countedActionCount).toBe(2)
+    expect(state.units.find((unit) => unit.id === WANG_DAHAI_UNIT_ID)?.momentum)
+      .toBe(8)
+  })
+
+  it('skips normally when the original action has killed every enemy', () => {
+    const result = useWangDahaiFirstSkill(
+      setupMyriadRivers(
+        { momentum: 10 },
+        [createUnit('other', {
+          camp: Camp.Enemy,
+          speed: 1,
+          currentHealth: 1,
+          maximumHealth: 1,
+        })],
+      ),
+      firstSkillRequest('myriad-no-enemies', WANG_DAHAI_NEW_TIDE_BRANCH_ID),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.units.find((unit) => unit.id === unitId('other')))
+      .toMatchObject({ alive: false, currentHealth: 0 })
+    expect(result.events.filter((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+      && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+    ))).toHaveLength(0)
+    expect(result.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))?.momentum).toBe(12)
+  })
+
+  it('keeps damage when resource protection prevents momentum reduction', () => {
+    const protectionId = 'counter:test:myriad-protection' as SpecialCounterId
+    const awaiting = setupMyriadRivers({
+      momentum: 10,
+      specialCounters: [{ counterId: protectionId, value: 1 }],
+      resourceReductionProtections: [{
+        resourceType: ResourceType.Momentum,
+        counterId: protectionId,
+        minimumCounterValue: 1,
+      }],
+    })
+    const completed = completePlainWangAction(awaiting, 'myriad-protected')
+
+    expect(completed.ok).toBe(true)
+    if (!completed.ok) return
+    expect(completed.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))?.momentum).toBe(10)
+    expect(completed.state.units.find((unit) => unit.id === unitId('other')))
+      .toMatchObject({ currentHealth: 70 })
+    expect(completed.events.filter((event) => (
+      event.type === 'RESOURCE_REDUCTION_PREVENTED'
+      && event.reason === 'wangDahaiMyriadRivers'
+    ))).toHaveLength(1)
+  })
+
+  it('rolls the original action back when automatic damage fails', () => {
+    const awaiting = setupMyriadRivers({
+      momentum: 10,
+      criticalRate: 1,
+      criticalDamage: Number.MAX_VALUE,
+    })
+    const completed = completePlainWangAction(awaiting, 'myriad-damage-failure')
+
+    expect(completed).toMatchObject({
+      ok: false,
+      state: awaiting,
+      reason: 'INVALID_NUMERIC_INPUT',
+    })
+    expect(completed.state.units).toBe(awaiting.units)
+    expect(completed.state.events).toBe(awaiting.events)
+    expect(completed.state.rngState).toBe(awaiting.rngState)
+  })
+
+  it('rolls the original action back when automatic critical RNG is exhausted', () => {
+    const rng = createFixedSequenceRandomState([])
+    const awaiting = setupMyriadRivers(
+      { momentum: 10, criticalRate: 0.5 },
+      undefined,
+      { rngState: rng },
+    )
+    const completed = completePlainWangAction(awaiting, 'myriad-rng-failure')
+
+    expect(completed).toMatchObject({
+      ok: false,
+      state: awaiting,
+      reason: 'RANDOM_SOURCE_EXHAUSTED',
+    })
+    expect(completed.state.units).toBe(awaiting.units)
+    expect(completed.state.events).toBe(awaiting.events)
+    expect(completed.state.rngState).toBe(rng)
+    expect(completed.state.rngState.cursor).toBe(0)
   })
 })
 

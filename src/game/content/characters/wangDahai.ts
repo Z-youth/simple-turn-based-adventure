@@ -35,6 +35,7 @@ import type {
   UnitId,
 } from '../../core/identifiers'
 import { resolveResourcePaidSkillTransaction } from '../../core/resourceTransaction'
+import { resolveTriggeredSkillTransaction } from '../../core/resolutionTransaction'
 import { removeBattleStatus } from '../../core/statusEngine'
 import {
   decreaseSpecialCounter,
@@ -69,6 +70,8 @@ export const WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID =
   'counter:wang-dahai:stacking-wave-skill-lock' as SpecialCounterId
 export const WANG_DAHAI_FIRST_SKILL_ID =
   'skill:wang-dahai:first' as SkillId
+export const WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID =
+  'skill:wang-dahai:myriad-rivers' as SkillId
 export const WANG_DAHAI_NEW_TIDE_BRANCH_ID =
   'skill-branch:wang-dahai:new-tide' as SkillBranchId
 export const WANG_DAHAI_STACKING_WAVE_BRANCH_ID =
@@ -83,6 +86,8 @@ const NEW_TIDE_ENERGY_GAIN = 2
 const NEW_TIDE_MOMENTUM_GAIN = 1
 const STACKING_WAVE_ENERGY_COST = 1
 const STACKING_WAVE_MAX_MOMENTUM_GAIN = 6
+const MYRIAD_RIVERS_MOMENTUM_THRESHOLD = 10
+const MYRIAD_RIVERS_MOMENTUM_REDUCTION = 10
 
 export interface WangDahaiFirstSkillRequest {
   readonly branchId: SkillBranchId
@@ -395,7 +400,7 @@ function findFirstSkillBranch(
   return null
 }
 
-export function applyWangDahaiAfterActionEffects(
+function applyStackingWaveAfterActionEffects(
   state: BattleState,
   action: ActionContext,
 ): WangDahaiEffectResult {
@@ -471,6 +476,98 @@ export function applyWangDahaiAfterActionEffects(
     ok: true,
     state: locked.state,
     events: [...counted.events, ...gained.events, ...locked.events],
+  }
+}
+
+function myriadRiversExecutionPrefix(action: ActionContext): string {
+  return `${action.personalTurnId}:${action.actionId}:wang-dahai:myriad-rivers`
+}
+
+export function applyAutomaticWangDahaiMyriadRivers(
+  state: BattleState,
+  action: ActionContext,
+): WangDahaiEffectResult {
+  const turn = state.personalTurn
+  const unit = findWangDahai(state)
+  if (
+    !action.countsAsAction
+    || action.actorId !== WANG_DAHAI_UNIT_ID
+    || turn === null
+    || turn.personalTurnId !== action.personalTurnId
+    || turn.phase !== PersonalTurnPhase.AwaitingAction
+    || unit === null
+  ) return { ok: true, state, events: [] }
+  if (unit.momentum < MYRIAD_RIVERS_MOMENTUM_THRESHOLD) {
+    return { ok: true, state, events: [] }
+  }
+
+  const enemies = state.units.filter((candidate) => (
+    candidate.camp !== unit.camp && isUnitAlive(candidate)
+  ))
+  if (enemies.length === 0) return { ok: true, state, events: [] }
+
+  const prefix = myriadRiversExecutionPrefix(action)
+  const skillExecutionId = `${prefix}:skill-execution` as SkillExecutionId
+  if (state.resolutionIds.skillExecutionIds.includes(skillExecutionId)) {
+    return { ok: true, state, events: [] }
+  }
+  const attackId = `${prefix}:attack` as AttackId
+  const attack: NormalAttackRequest = {
+    attackId,
+    damageType: DamageType.Normal,
+    effectiveAttack: getEffectiveAttack(unit),
+    multiplier: 1,
+    fixedDamage: 0,
+    criticalRate: getEffectiveCriticalRate(unit),
+    criticalDamage: getEffectiveCriticalDamage(unit),
+    normalDamageIncrease: unit.normalDamageIncrease,
+    targets: enemies.map((target) => ({
+      targetId: target.id,
+      damageEventId: `${prefix}:damage:${target.id}` as DamageEventId,
+    })),
+  }
+  const resolved = resolveTriggeredSkillTransaction(state, {
+    skillExecutionId,
+    skillId: WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID,
+    actionId: action.actionId,
+    personalTurnId: action.personalTurnId,
+    sequenceId: action.sequenceId,
+    casterId: unit.id,
+    attacks: [attack],
+    effects: [
+      { kind: 'attack', attack },
+      {
+        kind: 'resource',
+        operation: 'spend',
+        unitId: unit.id,
+        resourceType: ResourceType.Momentum,
+        amount: MYRIAD_RIVERS_MOMENTUM_REDUCTION,
+        reason: 'wangDahaiMyriadRivers',
+      },
+    ],
+  })
+  if (!resolved.ok) return failure(state, resolved.reason)
+  return resolved
+}
+
+export function applyWangDahaiAfterActionEffects(
+  state: BattleState,
+  action: ActionContext,
+): WangDahaiEffectResult {
+  if (action.actorId !== WANG_DAHAI_UNIT_ID || !action.countsAsAction) {
+    return { ok: true, state, events: [] }
+  }
+  const stackingWave = applyStackingWaveAfterActionEffects(state, action)
+  if (!stackingWave.ok) return failure(state, stackingWave.reason)
+  const myriadRivers = applyAutomaticWangDahaiMyriadRivers(
+    stackingWave.state,
+    action,
+  )
+  if (!myriadRivers.ok) return failure(state, myriadRivers.reason)
+  return {
+    ok: true,
+    state: myriadRivers.state,
+    events: [...stackingWave.events, ...myriadRivers.events],
   }
 }
 
