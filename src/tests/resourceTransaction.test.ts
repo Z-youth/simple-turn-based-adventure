@@ -14,6 +14,7 @@ import type {
   SkillBranchId,
   SkillExecutionId,
   SkillId,
+  SpecialCounterId,
   StatusBatchId,
   StatusId,
 } from '../game/core/identifiers'
@@ -39,10 +40,12 @@ import {
 import { createFixedSequenceRandomState } from '../game/core/rng'
 import { createBattleState, createUnit, unitId } from './battleTestUtils'
 import type { StatusBatch } from '../game/core/statuses'
+import { readSpecialCounter } from '../game/core/specialCounters'
 
 const actionId = 'action:resource' as ActionId
 const skillExecutionId = 'skill-execution:resource' as SkillExecutionId
 const skillId = 'skill:resource' as SkillId
+const specialCounterId = 'counter:resource-test' as SpecialCounterId
 
 function setup(overrides = {}) {
   const awaiting = startBattleSequence(createBattleState([
@@ -331,6 +334,36 @@ describe('resource payment lifecycle', () => {
       .toBe(skillExecutionId)
   })
 
+  it('completes protected resource payment without reducing the resource', () => {
+    const { resolving } = setup({
+      momentum: 1,
+      specialCounters: [{ counterId: specialCounterId, value: 1 }],
+      resourceReductionProtections: [{
+        resourceType: ResourceType.Momentum,
+        counterId: specialCounterId,
+        minimumCounterValue: 1,
+      }],
+    })
+    const result = resolveResourcePaidSkillTransaction(
+      resolving,
+      payment(resolving, [{ resourceType: ResourceType.Momentum, amount: 99 }]),
+      skill(resolving),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.units.find((unit) => unit.id === unitId('actor')))
+      .toMatchObject({ momentum: 1 })
+    expect(result.events).toContainEqual(expect.objectContaining({
+      type: 'RESOURCE_REDUCTION_PREVENTED',
+      resourceType: ResourceType.Momentum,
+      attemptedAmount: 99,
+      protectionCounterId: specialCounterId,
+    }))
+    expect(result.state.completedResourcePayment).not.toBeNull()
+    expect(result.state.completedSkillResolution).not.toBeNull()
+  })
+
   it('returns the exact input state when any resource is insufficient before payment', () => {
     const { resolving } = setup()
     const result = resolveResourcePaidSkillTransaction(
@@ -536,6 +569,13 @@ describe('payment and skill atomicity', () => {
             value: 2,
             expiresAtTurnEnd: true,
           },
+          {
+            kind: 'specialCounter',
+            operation: 'increase',
+            unitId: unitId('actor'),
+            counterId: specialCounterId,
+            amount: 2,
+          },
           { kind: 'attack', attack: request.attacks[0] },
           {
             kind: 'resource',
@@ -555,6 +595,7 @@ describe('payment and skill atomicity', () => {
     expect(result.state).toBe(awaiting)
     expect(result.events).toEqual([])
     expect(result.state.units).toBe(awaiting.units)
+    expect(readSpecialCounter(result.state.units[0], specialCounterId)).toBe(0)
     expect(result.state.statusBatches).toBe(awaiting.statusBatches)
     expect(result.state.events).toBe(awaiting.events)
     expect(result.state.rngState).toBe(rng)

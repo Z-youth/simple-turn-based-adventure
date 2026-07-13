@@ -3,6 +3,10 @@ import type { ResourceTransactionId, UnitId } from './identifiers'
 import type { UnitState } from './units'
 import type { BattleEvent } from './events'
 import { roundIntegerResult } from './rounding'
+import {
+  findActiveResourceReductionProtection,
+  validateSpecialCounters,
+} from './specialCounters'
 
 export const ResourceType = Object.freeze({
   Energy: 'energy',
@@ -52,6 +56,8 @@ export type ResourceErrorCode =
   | 'INVALID_RESOURCE_CONFIGURATION'
   | 'RESOURCE_VALUE_OUT_OF_RANGE'
   | 'INSUFFICIENT_RESOURCE'
+  | 'INVALID_SPECIAL_COUNTER_STATE'
+  | 'INVALID_RESOURCE_REDUCTION_PROTECTION'
 
 export interface ResourceContextIds {
   readonly actionId: import('./identifiers').ActionId | null
@@ -238,6 +244,7 @@ export function unitResourcesMatchConfiguration(
   configuration: ResourceConfiguration,
 ): boolean {
   if (validateResourceConfiguration(configuration) !== null) return false
+  if (validateUnitResourceReductionProtections(unit) !== null) return false
   return CANONICAL_RESOURCE_TYPE_ORDER.every((resourceType) => {
     const config = getResourceConfig(configuration, resourceType)
     const value = readUnitResource(unit, resourceType)
@@ -246,6 +253,33 @@ export function unitResourcesMatchConfiguration(
       && value >= config.minimum
       && (config.maximum === null || value <= config.maximum)
   })
+}
+
+export function validateUnitResourceReductionProtections(
+  unit: UnitState,
+): ResourceErrorCode | null {
+  if (validateSpecialCounters(unit) !== null) {
+    return 'INVALID_SPECIAL_COUNTER_STATE'
+  }
+  if (!Array.isArray(unit.resourceReductionProtections)) {
+    return 'INVALID_RESOURCE_REDUCTION_PROTECTION'
+  }
+  const keys: string[] = []
+  for (const protection of unit.resourceReductionProtections) {
+    if (
+      protection === null
+      || typeof protection !== 'object'
+      || !CANONICAL_RESOURCE_TYPE_ORDER.includes(protection.resourceType)
+      || typeof protection.counterId !== 'string'
+      || protection.counterId.length === 0
+      || !Number.isSafeInteger(protection.minimumCounterValue)
+      || protection.minimumCounterValue <= 0
+    ) return 'INVALID_RESOURCE_REDUCTION_PROTECTION'
+    keys.push(`${protection.resourceType}:${protection.counterId}`)
+  }
+  return new Set(keys).size === keys.length
+    ? null
+    : 'INVALID_RESOURCE_REDUCTION_PROTECTION'
 }
 
 export function readUnitResource(
@@ -314,6 +348,8 @@ function changeResource(
   if (!unit.alive || (!unit.hasInfiniteHealth && unit.currentHealth <= 0)) {
     return failure(state, 'RESOURCE_OWNER_DEAD')
   }
+  const invalidProtection = validateUnitResourceReductionProtections(unit)
+  if (invalidProtection !== null) return failure(state, invalidProtection)
   const config = getResourceConfig(
     state.resourceConfiguration,
     request.resourceType,
@@ -328,6 +364,33 @@ function changeResource(
     || before < config.minimum
     || (config.maximum !== null && before > config.maximum)) {
     return failure(state, 'RESOURCE_VALUE_OUT_OF_RANGE')
+  }
+  if (kind === 'spend') {
+    const protection = findActiveResourceReductionProtection(
+      unit,
+      request.resourceType,
+    )
+    if (protection !== null) {
+      const event: BattleEvent = {
+        type: 'RESOURCE_REDUCTION_PREVENTED',
+        unitId: request.unitId,
+        resourceType: request.resourceType,
+        attemptedAmount: request.amount,
+        protectionCounterId: protection.counterId,
+        reason: request.reason,
+        sourceId: request.sourceId,
+        actionId: request.actionId,
+        personalTurnId: request.personalTurnId,
+        sequenceId: request.sequenceId,
+        skillExecutionId: request.skillExecutionId,
+        resourceTransactionId: request.resourceTransactionId,
+      }
+      return {
+        ok: true,
+        state: { ...state, events: [...state.events, event] },
+        events: [event],
+      }
+    }
   }
   const rawAfter = kind === 'gain'
     ? before + request.amount

@@ -1,5 +1,9 @@
 import type { Camp, Position, UnitSystem } from './enums'
 import type { SkillId, StatusId, UnitId } from './identifiers'
+import type {
+  ResourceReductionProtection,
+  SpecialCounter,
+} from './specialCounters'
 
 export type ModifierSourceId = SkillId | StatusId | UnitId
 
@@ -40,5 +44,7 @@ export interface UnitState {
   readonly intent: number
   readonly magic: number
   readonly momentumPressure: number
+  readonly specialCounters: readonly SpecialCounter[]
+  readonly resourceReductionProtections: readonly ResourceReductionProtection[]
   readonly alive: boolean
 }

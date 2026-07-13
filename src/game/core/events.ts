@@ -17,6 +17,7 @@ import type {
   TurnSequenceId,
   UnitId,
   ResourceTransactionId,
+  SpecialCounterId,
 } from './identifiers'
 import type { ResourceType } from './resources'
 import type { ModifierSourceId } from './units'
@@ -200,6 +201,35 @@ export interface ResourceChangedEvent {
   readonly resourceTransactionId: ResourceTransactionId | null
 }
 
+export interface ResourceReductionPreventedEvent {
+  readonly type: 'RESOURCE_REDUCTION_PREVENTED'
+  readonly unitId: UnitId
+  readonly resourceType: ResourceType
+  readonly attemptedAmount: number
+  readonly protectionCounterId: SpecialCounterId
+  readonly reason: string
+  readonly sourceId: string | null
+  readonly actionId: ActionId | null
+  readonly personalTurnId: PersonalTurnId | null
+  readonly sequenceId: TurnSequenceId | null
+  readonly skillExecutionId: SkillExecutionId | null
+  readonly resourceTransactionId: ResourceTransactionId | null
+}
+
+export interface SpecialCounterChangedEvent {
+  readonly type: 'SPECIAL_COUNTER_CHANGED'
+  readonly unitId: UnitId
+  readonly counterId: SpecialCounterId
+  readonly operation: 'increase' | 'decrease'
+  readonly amount: number
+  readonly before: number
+  readonly after: number
+  readonly actionId: ActionId | null
+  readonly personalTurnId: PersonalTurnId | null
+  readonly sequenceId: TurnSequenceId | null
+  readonly skillExecutionId: SkillExecutionId | null
+}
+
 export interface MomentumPressureRecalculatedEvent {
   readonly type: 'MOMENTUM_PRESSURE_RECALCULATED'
   readonly unitId: UnitId
@@ -302,6 +332,8 @@ export type BattleEvent =
   | ExtraDamageAppliedEvent
   | AttackCompletedEvent
   | ResourceChangedEvent
+  | ResourceReductionPreventedEvent
+  | SpecialCounterChangedEvent
   | MomentumPressureRecalculatedEvent
   | MomentumPressureClearedEvent
   | MomentumPressureTriggeredEvent

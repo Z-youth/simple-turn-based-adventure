@@ -25,8 +25,10 @@ import {
   RESOURCE_TYPE_ORDER,
   spendResource,
   validateResourceConfiguration,
+  validateUnitResourceReductionProtections,
   unitResourcesMatchConfiguration,
 } from './resources'
+import { findActiveResourceReductionProtection } from './specialCounters'
 
 export interface ResourcePaymentRequest {
   readonly resourceTransactionId: ResourceTransactionId
@@ -187,6 +189,10 @@ function prepareResourcePayment(
   if (!payer.alive || (!payer.hasInfiniteHealth && payer.currentHealth <= 0)) {
     return paymentFailure(state, 'RESOURCE_OWNER_DEAD')
   }
+  const invalidProtection = validateUnitResourceReductionProtections(payer)
+  if (invalidProtection !== null) {
+    return paymentFailure(state, invalidProtection)
+  }
   if (!unitResourcesMatchConfiguration(payer, state.resourceConfiguration)) {
     return paymentFailure(state, 'RESOURCE_VALUE_OUT_OF_RANGE')
   }
@@ -201,6 +207,9 @@ function prepareResourcePayment(
     const current = readUnitResource(payer, cost.resourceType)
     if (!Number.isSafeInteger(current)) {
       return paymentFailure(state, 'RESOURCE_VALUE_OUT_OF_RANGE')
+    }
+    if (findActiveResourceReductionProtection(payer, cost.resourceType) !== null) {
+      continue
     }
     if (current - cost.amount < config.minimum) {
       return paymentFailure(state, 'INSUFFICIENT_RESOURCE')

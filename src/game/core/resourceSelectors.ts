@@ -8,6 +8,7 @@ import {
   unitResourcesMatchConfiguration,
 } from './resources'
 import type { ResourceType as ResourceTypeValue } from './resources'
+import { findActiveResourceReductionProtection } from './specialCounters'
 
 export function getResourceValue(
   unit: UnitState,
@@ -77,6 +78,7 @@ export function canAffordResourceCosts(
     const config = getResourceConfig(configuration, resourceType)
     return config !== undefined
       && config.allowSpend
-      && readUnitResource(unit, resourceType) - total >= config.minimum
+      && (findActiveResourceReductionProtection(unit, resourceType) !== null
+        || readUnitResource(unit, resourceType) - total >= config.minimum)
   })
 }

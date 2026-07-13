@@ -1,5 +1,6 @@
 import type { BattleState } from './contexts'
 import type { UnitState } from './units'
+import { validateSpecialCounters } from './specialCounters'
 
 export type CombatUnitValidationErrorCode =
   | 'INVALID_UNIT_NUMERIC_STATE'
@@ -7,6 +8,7 @@ export type CombatUnitValidationErrorCode =
   | 'INVALID_UNIT_HEALTH'
   | 'INVALID_UNIT_SHIELD'
   | 'INVALID_UNIT_RESOURCE_STATE'
+  | 'INVALID_SPECIAL_COUNTER_STATE'
 
 function allFinite(values: readonly number[]): boolean {
   return values.every(Number.isFinite)
@@ -62,6 +64,9 @@ export function validateCombatUnit(
     return 'INVALID_UNIT_HEALTH'
   }
   if (unit.shield < 0) return 'INVALID_UNIT_SHIELD'
+  if (validateSpecialCounters(unit) !== null) {
+    return 'INVALID_SPECIAL_COUNTER_STATE'
+  }
   if (![
     unit.energy,
     unit.momentum,

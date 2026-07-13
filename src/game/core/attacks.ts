@@ -7,6 +7,7 @@ import type {
   SkillBranchId,
   SkillExecutionId,
   SkillId,
+  SpecialCounterId,
   TriggerLockId,
   TurnSequenceId,
   UnitId,
@@ -84,6 +85,14 @@ export interface SkillTemporaryAttributeEffectRequest {
   readonly expiresAtTurnEnd: true
 }
 
+export interface SkillSpecialCounterEffectRequest {
+  readonly kind: 'specialCounter'
+  readonly operation: 'increase' | 'decrease'
+  readonly unitId: UnitId
+  readonly counterId: SpecialCounterId
+  readonly amount: number
+}
+
 export interface SkillAttackEffectRequest {
   readonly kind: 'attack'
   readonly attack: AttackRequest
@@ -93,6 +102,7 @@ export type SkillEffectRequest =
   | SkillResourceEffectRequest
   | SkillStatusAddEffectRequest
   | SkillStatusRemoveEffectRequest
+  | SkillSpecialCounterEffectRequest
   | SkillTemporaryAttributeEffectRequest
   | SkillAttackEffectRequest
 

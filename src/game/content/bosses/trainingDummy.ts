@@ -205,6 +205,8 @@ export function createTrainingDummy(): UnitState {
     intent: 0,
     magic: 0,
     momentumPressure: 0,
+    specialCounters: [],
+    resourceReductionProtections: [],
     alive: true,
   }
 }

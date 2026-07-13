@@ -17,6 +17,10 @@ import type {
 } from '../game/core/identifiers'
 import type { StatusBatch } from '../game/core/statuses'
 import type { UnitState } from '../game/core/units'
+import type {
+  ResourceReductionProtection,
+  SpecialCounter,
+} from '../game/core/specialCounters'
 import type { RandomState } from '../game/core/rng'
 import type {
   ResourceChangeRequest,
@@ -50,6 +54,8 @@ declare const resourceCost: ResourceCost
 declare const resourceEvent: ResourceChangedEvent
 declare const resourceTransactionId: ResourceTransactionId
 declare const resourcePaymentRequest: ResourcePaymentRequest
+declare const specialCounter: SpecialCounter
+declare const resourceReductionProtection: ResourceReductionProtection
 
 // @ts-expect-error Core battle phase is changed only through transitions.
 battleState.phase = BattlePhase.AwaitingAction
@@ -93,6 +99,12 @@ unit.momentumPressure = 1
 unit.intent = 1
 // @ts-expect-error Magic changes only through resource transactions.
 unit.magic = 1
+// @ts-expect-error Special counter entries cannot be appended externally.
+unit.specialCounters.push(specialCounter)
+// @ts-expect-error Special counter values change only through controlled transitions.
+specialCounter.value = 1
+// @ts-expect-error Resource protection configuration is immutable.
+unit.resourceReductionProtections.push(resourceReductionProtection)
 // @ts-expect-error Status batches cannot be appended externally.
 battleState.statusBatches.push(statusBatch)
 // @ts-expect-error Status acquisition history cannot be extended externally.

@@ -56,6 +56,11 @@ import {
   addStatusToBattle,
   removeBattleStatus,
 } from './statusEngine'
+import type { SpecialCounterErrorCode } from './specialCounters'
+import {
+  decreaseSpecialCounter,
+  increaseSpecialCounter,
+} from './specialCounters'
 import {
   createMomentumPressureDamageEventId,
   getMomentumPressureExtraDamage,
@@ -65,6 +70,7 @@ import {
 export type SkillResolutionErrorCode = CombatUnitValidationErrorCode
   | ResourceErrorCode
   | StatusErrorCode
+  | SpecialCounterErrorCode
   | 'NOT_AT_SKILL_RESOLUTION_BOUNDARY'
   | 'NO_ACTIVE_ACTION'
   | 'ACTIVE_SKILL_ALREADY_EXISTS'
@@ -441,6 +447,25 @@ export function resolveSkillTransaction(
         if (!changed.ok) return failure(state, changed.reason)
         statusBatches = changed.state.statusBatches
         statusAcquisitionOrders = changed.state.statusAcquisitionOrders
+        events.push(...changed.events)
+        continue
+      }
+
+      if (effect.kind === 'specialCounter') {
+        const change = effect.operation === 'increase'
+          ? increaseSpecialCounter
+          : decreaseSpecialCounter
+        const changed = change(effectState(), {
+          unitId: effect.unitId,
+          counterId: effect.counterId,
+          amount: effect.amount,
+          actionId: request.actionId,
+          personalTurnId: request.personalTurnId,
+          sequenceId: request.sequenceId,
+          skillExecutionId: request.skillExecutionId,
+        })
+        if (!changed.ok) return failure(state, changed.reason)
+        units = changed.state.units
         events.push(...changed.events)
         continue
       }

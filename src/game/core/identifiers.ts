@@ -14,3 +14,4 @@ export type TriggerLockId = Brand<string, 'TriggerLockId'>
 export type TurnSequenceId = Brand<string, 'TurnSequenceId'>
 export type PersonalTurnId = Brand<string, 'PersonalTurnId'>
 export type ResourceTransactionId = Brand<string, 'ResourceTransactionId'>
+export type SpecialCounterId = Brand<string, 'SpecialCounterId'>
