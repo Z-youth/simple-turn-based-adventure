@@ -1,43 +1,44 @@
-# React + TypeScript + Vite
+# 简单的回合制大冒险
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+一个运行在浏览器中的原创回合制战斗测试版。项目用于验证行动序列、角色技能、资源、护盾与训练流程，不包含正式美术或完整挑战内容。
 
-Currently, two official plugins are available:
+## 当前可用功能
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- 初始页、模式选择、队伍与站位配置、Boss 选择，以及可直接进入的训练战斗。
+- 当前已实现角色与训练假人 Boss 的数据驱动配置；队伍可选 1 至 4 名角色，每个站位仅可配置一人。
+- 玩家回合会根据实际可行动单位显示可用技能；既有战斗引擎负责自动行动、资源支付、死亡和后续结算。
+- 训练可手动暂停；全员倒下也会暂停。暂停后可只读查看完整日志与战场、重置，或经确认退出。
+- 击败有限生命 Boss 时显示基于真实战斗事件统计的结果页，支持同队伍、站位与 Boss 重新开始或退出。
 
-## React Compiler
+> 挑战模式目前只显示“开发中，不要再点啦！”，尚未实现完整流程。
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## 本地运行与检查
 
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm run dev
+npm run test
+npm run lint
+npm run build
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+在 Windows PowerShell 如遇执行策略限制，可使用 `npm.cmd run dev`、`npm.cmd run test` 等等价命令。
 
-## 开发规格
+## 简要架构
 
-- [`docs/01_GAME_DESIGN.md`](docs/01_GAME_DESIGN.md)：游戏设计基线与整体玩法目标。
-- [`docs/02_PROTOTYPE_SCOPE.md`](docs/02_PROTOTYPE_SCOPE.md)：测试版范围与功能边界。
-- [`docs/03_COMBAT_RULES.md`](docs/03_COMBAT_RULES.md)：战斗流程、数值与状态规则。
-- [`docs/04_CONTENT_SPEC.md`](docs/04_CONTENT_SPEC.md)：角色、敌人和技能内容规格。
-- [`docs/05_IMPLEMENTATION_PLAN.md`](docs/05_IMPLEMENTATION_PLAN.md)：阶段划分与实施顺序。
-- [`docs/06_ACCEPTANCE_TESTS.md`](docs/06_ACCEPTANCE_TESTS.md)：自动与人工验收标准。
+- `src/App.tsx`：React 流程界面、战场展示、暂停页与结果页；只负责交互和渲染。
+- `src/game/core/`：与 React/DOM 分离的战斗状态、行动序列、伤害、资源、状态与训练结算核心。
+- `src/game/content/`：角色、Boss 和技能的内容定义及战斗扩展。
+- `src/game/ui/battleUiAdapter.ts`：将已注册内容和核心战斗接口适配到 UI，不在 UI 中重复实现规则。
+- `src/tests/`：Vitest 覆盖核心规则与训练流程回归。
 
-原始设计与用户最新确认的规则优先。Codex 开始任何开发阶段前都必须阅读 `AGENTS.md` 和 `docs/` 下的全部规格，不得根据模糊理解自行修改玩法。
+## 规则来源
+
+以下 Google Drive 设计文档是现行规则权威；README 不复述具体规则：
+
+- [《创意收集整理》](https://docs.google.com/document/d/15x5R38AizpdmDYkoJCZoq5ii5TBPNJ7dsLgFcjLkLeY/edit)
+- [《游戏流程》](https://docs.google.com/document/d/17Ra7low9mremr0kd4OxGrf4KZ9oM4e5o1s_0SDTC_Q8/edit)
+- [《通用战斗规则》](https://docs.google.com/document/d/1Cz9U_L46iw0Xm8pIEYnB2Vk5MrZDX0P7TmiXCID-YfQ/edit)
+- [《角色档案》](https://docs.google.com/document/d/1Q5mxC_4zWcE2tjtZGFKLMWJeObHyEkCS7WWhaM_T7kw/edit)
+- [《boss档案》](https://docs.google.com/document/d/1Jcxk6ggsxKWifpKlMcEIja-nhy3r9vb1Rn2eEctAQKk/edit)
+
+仓库中的 `docs/` 是同步参考与验收材料，不替代上述现行设计文档；如有冲突，以用户最新确认和 Google Drive 原文为准。
