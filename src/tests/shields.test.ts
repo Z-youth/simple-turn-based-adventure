@@ -51,6 +51,51 @@ describe('shield changes', () => {
     })])
   })
 
+  it('caps finite-health shield at twice maximum health while preserving the gain event', () => {
+    const state = createBattleState([createUnit('unit', {
+      maximumHealth: 100,
+      shield: 195,
+    })])
+    const result = gainShield(state, {
+      unitId: unitId('unit'),
+      amount: 20,
+      reason: 'cappedShieldGain',
+      personalTurnId: null,
+      sequenceId: null,
+      skillExecutionId: null,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.units[0].shield).toBe(200)
+    expect(result.events).toEqual([expect.objectContaining({
+      type: 'SHIELD_GAINED',
+      amount: 20,
+      before: 195,
+      after: 200,
+    })])
+  })
+
+  it('does not cap an infinite-health unit shield', () => {
+    const state = createBattleState([createUnit('unit', {
+      maximumHealth: 1,
+      hasInfiniteHealth: true,
+      shield: 195,
+    })])
+    const result = gainShield(state, {
+      unitId: unitId('unit'),
+      amount: 20,
+      reason: 'infiniteShieldGain',
+      personalTurnId: null,
+      sequenceId: null,
+      skillExecutionId: null,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.units[0].shield).toBe(215)
+  })
+
   it('returns the original battle state when stateful shield gain fails', () => {
     const state = createBattleState([createUnit('unit', {
       shield: Number.MAX_SAFE_INTEGER,

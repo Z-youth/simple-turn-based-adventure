@@ -3,7 +3,10 @@ import {
   BattlePhase,
   PersonalTurnPhase,
 } from './enums'
-import { EndTurnConfirmation } from './commands'
+import {
+  EndTurnConfirmation,
+  TrainingExitConfirmation,
+} from './commands'
 import type { EndTurnRequest } from './commands'
 import type {
   ActionContext,
@@ -58,6 +61,18 @@ export type BattleTransitionResult =
   | BattleTransitionFailure
 
 export interface BattleEngineExtensions {
+  readonly applySequenceStartEffects?: (
+    state: BattleState,
+    sequence: TurnSequenceState,
+  ) => BattleTransitionResult
+  readonly applyTurnStartPreSystemEffects?: (
+    state: BattleState,
+    turn: PersonalTurnState,
+  ) => BattleTransitionResult
+  readonly applyTurnStartPostSystemEffects?: (
+    state: BattleState,
+    turn: PersonalTurnState,
+  ) => BattleTransitionResult
   readonly applyUnitPassiveEffects?: (
     state: BattleState,
     turn: PersonalTurnState,
@@ -88,6 +103,20 @@ export interface EndTurnRequestResult {
   readonly reason?: string
 }
 
+export type TrainingExitRequestStatus =
+  | 'confirmationRequired'
+  | 'cancelled'
+  | 'exited'
+  | 'invalid'
+
+export interface TrainingExitRequestResult {
+  readonly status: TrainingExitRequestStatus
+  readonly state: BattleState
+  readonly events: readonly BattleEvent[]
+  readonly returnToModeSelection: boolean
+  readonly reason?: string
+}
+
 function failure(state: BattleState, reason: string): BattleTransitionFailure {
   return { ok: false, state, events: [], reason }
 }
@@ -102,6 +131,29 @@ function appendEvents(
   }
 }
 
+function applySequenceStartEffects(
+  state: BattleState,
+  sequence: TurnSequenceState,
+  extensions?: BattleEngineExtensions,
+): BattleTransitionResult {
+  const result = extensions?.applySequenceStartEffects?.(state, sequence)
+  if (result === undefined) return { ok: true, state, events: [] }
+  if (!result.ok) return result
+  const currentSequence = result.state.turnSequence
+  if (
+    result.state.phase !== BattlePhase.SequenceStart
+    || currentSequence === null
+    || currentSequence.sequenceId !== sequence.sequenceId
+    || result.state.personalTurn !== null
+    || result.state.activeAction !== null
+  ) return failure(state, 'SEQUENCE_START_EFFECTS_INVALID_STATE')
+  return {
+    ok: true,
+    state: { ...result.state, events: state.events },
+    events: result.events,
+  }
+}
+
 function findUnit(state: BattleState, unitId: UnitId): UnitState | undefined {
   return state.units.find((unit) => unit.id === unitId)
 }
@@ -110,6 +162,64 @@ function hasLivingHostileUnit(state: BattleState, camp: Camp): boolean {
   return state.units.some((unit) => (
     unit.camp !== camp && isUnitAlive(unit)
   ))
+}
+
+function isBattleStopped(state: BattleState): boolean {
+  return state.phase === BattlePhase.Paused
+    || state.phase === BattlePhase.Finished
+}
+
+function hasLivingPlayerUnit(state: BattleState): boolean {
+  return state.units.some((unit) => (
+    unit.camp === Camp.Player && isUnitAlive(unit)
+  ))
+}
+
+function hasDefeatedFiniteHealthBoss(state: BattleState): boolean {
+  return state.units.some((unit) => (
+    unit.camp === Camp.Enemy
+    && unit.isBoss
+    && !unit.hasInfiniteHealth
+    && !isUnitAlive(unit)
+  ))
+}
+
+function applyTrainingCompletion(state: BattleState): BattleTransitionResult {
+  if (state.trainingSession === null || state.trainingSession === undefined) {
+    return { ok: true, state, events: [] }
+  }
+
+  if (!hasLivingPlayerUnit(state)) {
+    const event: BattleEvent = {
+      type: 'TRAINING_PAUSED',
+      reason: 'ALL_PLAYER_UNITS_DEFEATED',
+    }
+    const paused: BattleState = {
+      ...state,
+      phase: BattlePhase.Paused,
+      activeAction: null,
+      activeSkill: null,
+      actionRollbackState: null,
+    }
+    return { ok: true, state: appendEvents(paused, [event]), events: [event] }
+  }
+
+  if (hasDefeatedFiniteHealthBoss(state)) {
+    const event: BattleEvent = {
+      type: 'TRAINING_FINISHED',
+      reason: 'FINITE_HEALTH_BOSS_DEFEATED',
+    }
+    const finished: BattleState = {
+      ...state,
+      phase: BattlePhase.Finished,
+      activeAction: null,
+      activeSkill: null,
+      actionRollbackState: null,
+    }
+    return { ok: true, state: appendEvents(finished, [event]), events: [event] }
+  }
+
+  return { ok: true, state, events: [] }
 }
 
 function createSequenceId(sequenceNumber: number): TurnSequenceId {
@@ -175,6 +285,9 @@ function advanceToNextLivingTurnStart(
   precedingEvents: readonly BattleEvent[],
   extensions?: BattleEngineExtensions,
 ): BattleTransitionResult {
+  if (isBattleStopped(state)) {
+    return { ok: true, state, events: [] }
+  }
   const existingSequence = state.turnSequence
   if (existingSequence === null) {
     return {
@@ -223,6 +336,25 @@ function advanceToNextLivingTurnStart(
       turnState = { ...turnState, personalTurn: turn }
       events.push(...stageResult.events)
       if (turn.phase === PersonalTurnPhase.StartingSystemRules) {
+        const preSystemResult = extensions?.applyTurnStartPreSystemEffects?.(
+          turnState,
+          turn,
+        )
+        if (preSystemResult !== undefined) {
+          if (!preSystemResult.ok) return failure(state, preSystemResult.reason)
+          const preSystemTurn = preSystemResult.state.personalTurn
+          if (
+            preSystemTurn === null
+            || preSystemTurn.personalTurnId !== turn.personalTurnId
+            || preSystemTurn.phase !== PersonalTurnPhase.StartingSystemRules
+          ) return failure(state, 'TURN_START_PRE_SYSTEM_EFFECTS_INVALID_TURN')
+          turnState = {
+            ...preSystemResult.state,
+            events: turnState.events,
+          }
+          turn = preSystemTurn
+          events.push(...preSystemResult.events)
+        }
         const pressureResult = recalculateMomentumPressure(
           turnState,
           unit.id,
@@ -231,6 +363,25 @@ function advanceToNextLivingTurnStart(
         if (!pressureResult.ok) return failure(state, pressureResult.reason)
         turnState = pressureResult.state
         events.push(...pressureResult.events)
+        const postSystemResult = extensions?.applyTurnStartPostSystemEffects?.(
+          turnState,
+          turn,
+        )
+        if (postSystemResult !== undefined) {
+          if (!postSystemResult.ok) return failure(state, postSystemResult.reason)
+          const postSystemTurn = postSystemResult.state.personalTurn
+          if (
+            postSystemTurn === null
+            || postSystemTurn.personalTurnId !== turn.personalTurnId
+            || postSystemTurn.phase !== PersonalTurnPhase.StartingSystemRules
+          ) return failure(state, 'TURN_START_POST_SYSTEM_EFFECTS_INVALID_TURN')
+          turnState = {
+            ...postSystemResult.state,
+            events: turnState.events,
+          }
+          turn = postSystemTurn
+          events.push(...postSystemResult.events)
+        }
       }
       if (
         turn.phase === PersonalTurnPhase.StartingUnitPassives
@@ -294,8 +445,23 @@ function advanceToNextLivingTurnStart(
     return stopBecauseNoEligibleUnits(nextState, nextSequence, events)
   }
 
-  const advanced = advanceToNextLivingTurnStart(nextState, events, extensions)
-  return advanced.ok ? advanced : failure(state, advanced.reason)
+  const sequenceEffects = applySequenceStartEffects(
+    nextState,
+    nextSequence,
+    extensions,
+  )
+  if (!sequenceEffects.ok) return failure(state, sequenceEffects.reason)
+  const advanced = advanceToNextLivingTurnStart(
+    sequenceEffects.state,
+    [...events, ...sequenceEffects.events],
+    extensions,
+  )
+  if (!advanced.ok) return failure(state, advanced.reason)
+  return {
+    ok: true,
+    state: advanced.state,
+    events: advanced.events,
+  }
 }
 
 function runAutomaticActions(
@@ -303,6 +469,7 @@ function runAutomaticActions(
   extensions: BattleEngineExtensions | undefined,
   initialRollbackState: BattleState,
 ): BattleTransitionResult {
+  if (isBattleStopped(state)) return { ok: true, state, events: [] }
   if (extensions?.runAutomaticAction === undefined) {
     return { ok: true, state, events: [] }
   }
@@ -328,6 +495,9 @@ function runAutomaticActions(
     currentState = automaticResult.state
     rollbackState = currentState
     events.push(...automaticResult.events)
+    if (isBattleStopped(currentState)) {
+      return { ok: true, state: currentState, events }
+    }
     if (
       automaticActor !== undefined
       && !hasLivingHostileUnit(currentState, automaticActor.camp)
@@ -346,6 +516,7 @@ function continueAfterCommittedTurn(
   state: BattleState,
   extensions?: BattleEngineExtensions,
 ): BattleTransitionResult {
+  if (isBattleStopped(state)) return { ok: true, state, events: [] }
   const advanced = advanceToNextLivingTurnStart(state, [], extensions)
   if (!advanced.ok) return failure(state, advanced.reason)
   const automatic = runAutomaticActions(
@@ -365,6 +536,7 @@ export function startBattleSequence(
   state: BattleState,
   extensions?: BattleEngineExtensions,
 ): BattleTransitionResult {
+  if (isBattleStopped(state)) return failure(state, 'BATTLE_NOT_ACTIVE')
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)
   if (state.phase === BattlePhase.UnableToContinue) {
@@ -391,7 +563,17 @@ export function startBattleSequence(
     return stopBecauseNoEligibleUnits(nextState, sequence, [event])
   }
 
-  const advanced = advanceToNextLivingTurnStart(nextState, [event], extensions)
+  const sequenceEffects = applySequenceStartEffects(
+    nextState,
+    sequence,
+    extensions,
+  )
+  if (!sequenceEffects.ok) return failure(state, sequenceEffects.reason)
+  const advanced = advanceToNextLivingTurnStart(
+    sequenceEffects.state,
+    [event, ...sequenceEffects.events],
+    extensions,
+  )
   if (!advanced.ok) return failure(state, advanced.reason)
   const automatic = runAutomaticActions(
     advanced.state,
@@ -403,6 +585,74 @@ export function startBattleSequence(
     ok: true,
     state: automatic.state,
     events: [...advanced.events, ...automatic.events],
+  }
+}
+
+export function startTrainingBattle(
+  state: BattleState,
+  extensions?: BattleEngineExtensions,
+): BattleTransitionResult {
+  if (state.trainingSession !== null && state.trainingSession !== undefined) {
+    return failure(state, 'TRAINING_ALREADY_STARTED')
+  }
+  if (state.phase !== BattlePhase.Setup) {
+    return failure(state, 'TRAINING_MUST_START_FROM_SETUP')
+  }
+
+  const initialState: BattleState = {
+    ...state,
+    trainingSession: null,
+  }
+  return startBattleSequence({
+    ...state,
+    trainingSession: { initialState },
+  }, extensions)
+}
+
+export function resetTrainingBattle(
+  state: BattleState,
+  extensions?: BattleEngineExtensions,
+): BattleTransitionResult {
+  const session = state.trainingSession
+  if (session === null || session === undefined) {
+    return failure(state, 'TRAINING_SESSION_NOT_FOUND')
+  }
+  if (state.phase === BattlePhase.ResolvingAction) {
+    return failure(state, 'TRAINING_RESET_DURING_ACTION')
+  }
+
+  return startBattleSequence({
+    ...session.initialState,
+    trainingSession: session,
+  }, extensions)
+}
+
+export function pauseTrainingBattle(
+  state: BattleState,
+): BattleTransitionResult {
+  if (state.trainingSession === null || state.trainingSession === undefined) {
+    return failure(state, 'TRAINING_SESSION_NOT_FOUND')
+  }
+  if (isBattleStopped(state)) return failure(state, 'BATTLE_NOT_ACTIVE')
+  if (state.phase === BattlePhase.ResolvingAction) {
+    return failure(state, 'TRAINING_PAUSE_DURING_ACTION')
+  }
+
+  const event: BattleEvent = {
+    type: 'TRAINING_PAUSED',
+    reason: 'MANUAL_PAUSE',
+  }
+  const paused: BattleState = {
+    ...state,
+    phase: BattlePhase.Paused,
+    activeAction: null,
+    activeSkill: null,
+    actionRollbackState: null,
+  }
+  return {
+    ok: true,
+    state: appendEvents(paused, [event]),
+    events: [event],
   }
 }
 
@@ -545,6 +795,7 @@ export function endCurrentPersonalTurn(
   personalTurnId: PersonalTurnId,
   extensions?: BattleEngineExtensions,
 ): BattleTransitionResult {
+  if (isBattleStopped(state)) return failure(state, 'BATTLE_NOT_ACTIVE')
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)
   const committed = commitCurrentPersonalTurnEnd(
@@ -567,6 +818,7 @@ export function startBattleAction(
   state: BattleState,
   input: StartActionInput,
 ): BattleTransitionResult {
+  if (isBattleStopped(state)) return failure(state, 'BATTLE_NOT_ACTIVE')
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)
   if (state.personalTurn === null || state.activeAction !== null) {
@@ -598,6 +850,7 @@ export function completeCurrentBattleAction(
   actionId: ActionId,
   extensions?: BattleEngineExtensions,
 ): BattleTransitionResult {
+  if (isBattleStopped(state)) return failure(state, 'BATTLE_NOT_ACTIVE')
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)
   if (state.personalTurn === null || state.activeAction === null) {
@@ -649,10 +902,22 @@ export function completeCurrentBattleAction(
     completedSkillResolution: null,
     completedResourcePayment: null,
   }, result.events)
-  const afterAction = extensions?.applyAfterActionEffects?.(
-    completedState,
-    action,
-  )
+  const trainingCompletion = applyTrainingCompletion(completedState)
+  if (!trainingCompletion.ok) return trainingCompletion
+  if (isBattleStopped(trainingCompletion.state)) {
+    return {
+      ok: true,
+      state: trainingCompletion.state,
+      events: [...result.events, ...trainingCompletion.events],
+    }
+  }
+  const actorAfterSkill = findUnit(completedState, action.actorId)
+  const afterAction = actorAfterSkill !== undefined && isUnitAlive(actorAfterSkill)
+    ? extensions?.applyAfterActionEffects?.(
+      completedState,
+      action,
+    )
+    : undefined
   if (afterAction !== undefined && !afterAction.ok) {
     return failure(rollbackState, afterAction.reason)
   }
@@ -745,6 +1010,9 @@ export function resolveBattleSkill(
   state: BattleState,
   request: SkillResolutionRequest,
 ): SkillResolutionResult {
+  if (isBattleStopped(state)) {
+    return { ok: false, state, events: [], reason: 'NOT_AT_SKILL_RESOLUTION_BOUNDARY' }
+  }
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) {
     return { ok: false, state, events: [], reason: invalidUnits }
@@ -769,6 +1037,14 @@ export function requestPlayerEndTurn(
   request: EndTurnRequest,
   extensions?: BattleEngineExtensions,
 ): EndTurnRequestResult {
+  if (isBattleStopped(state)) {
+    return {
+      status: 'invalid',
+      state,
+      events: [],
+      reason: 'BATTLE_NOT_ACTIVE',
+    }
+  }
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) {
     return {
@@ -842,5 +1118,51 @@ export function requestPlayerEndTurn(
     status: 'turnEnded',
     state: result.state,
     events: [...committed.events, ...result.events],
+  }
+}
+
+export function requestTrainingExit(
+  state: BattleState,
+  confirmation: TrainingExitConfirmation = TrainingExitConfirmation.NotProvided,
+): TrainingExitRequestResult {
+  if (state.trainingSession === null || state.trainingSession === undefined) {
+    return {
+      status: 'invalid',
+      state,
+      events: [],
+      returnToModeSelection: false,
+      reason: 'TRAINING_SESSION_NOT_FOUND',
+    }
+  }
+  if (confirmation === TrainingExitConfirmation.Cancelled) {
+    return {
+      status: 'cancelled',
+      state,
+      events: [],
+      returnToModeSelection: false,
+    }
+  }
+  if (confirmation !== TrainingExitConfirmation.Confirmed) {
+    return {
+      status: 'confirmationRequired',
+      state,
+      events: [],
+      returnToModeSelection: false,
+    }
+  }
+
+  const event: BattleEvent = { type: 'TRAINING_EXIT_CONFIRMED' }
+  const exited: BattleState = {
+    ...state,
+    phase: BattlePhase.Finished,
+    activeAction: null,
+    activeSkill: null,
+    actionRollbackState: null,
+  }
+  return {
+    status: 'exited',
+    state: appendEvents(exited, [event]),
+    events: [event],
+    returnToModeSelection: true,
   }
 }

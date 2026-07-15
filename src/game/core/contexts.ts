@@ -24,6 +24,7 @@ import type { StatusBatch } from './statuses'
 import type { UnitState } from './units'
 import type { RandomState } from './rng'
 import type { ResourceConfiguration } from './resources'
+import type { ResourceCost } from './resources'
 
 export interface TurnQueueEntry {
   readonly unitId: UnitId
@@ -68,6 +69,7 @@ export interface ResourcePaymentCompletion {
   readonly personalTurnId: PersonalTurnId
   readonly sequenceId: TurnSequenceId
   readonly payerUnitId: UnitId
+  readonly reservedCosts: readonly ResourceCost[]
 }
 
 export interface ResourcePaymentRegistry {
@@ -157,6 +159,10 @@ export interface BattleLogEvent {
   readonly skillExecutionId: SkillExecutionId | null
 }
 
+export interface TrainingSessionState {
+  readonly initialState: BattleState
+}
+
 export interface BattleState {
   readonly phase: BattlePhase
   readonly units: readonly UnitState[]
@@ -175,4 +181,5 @@ export interface BattleState {
   readonly rngState: RandomState
   readonly log: readonly BattleLogEvent[]
   readonly events: readonly BattleEvent[]
+  readonly trainingSession?: TrainingSessionState | null
 }

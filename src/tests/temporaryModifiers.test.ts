@@ -41,7 +41,8 @@ function applyModifier(
   if (turn === null) throw new Error('Missing modifier test turn')
   return applyTemporaryAttributeModifier(state, {
     unitId: unitId('actor'),
-    sourceId: source,
+    sourceUnitId: unitId('actor'),
+    effectId: source,
     attribute,
     value,
     duration,

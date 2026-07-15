@@ -11,13 +11,12 @@ import type {
 } from './identifiers'
 import type { SkillResolutionRequest } from './attacks'
 import type { SkillResolutionErrorCode } from './resolutionTransaction'
-import { resolveSkillTransaction } from './resolutionTransaction'
+import { resolveReservedSkillTransaction } from './resolutionTransaction'
 import { validateRandomState } from './rng'
 import { validateBattleStateUnits } from './combatValidation'
 import type {
   ResourceCost,
   ResourceErrorCode,
-  ResourceType,
 } from './resources'
 import {
   getResourceConfig,
@@ -28,7 +27,6 @@ import {
   validateUnitResourceReductionProtections,
   unitResourcesMatchConfiguration,
 } from './resources'
-import { findActiveResourceReductionProtection } from './specialCounters'
 
 export interface ResourcePaymentRequest {
   readonly resourceTransactionId: ResourceTransactionId
@@ -172,7 +170,7 @@ function validatePaymentBoundary(
   return null
 }
 
-function prepareResourcePayment(
+function reserveResourcePayment(
   state: BattleState,
   request: ResourcePaymentRequest,
 ): PreparedPaymentResult {
@@ -208,20 +206,66 @@ function prepareResourcePayment(
     if (!Number.isSafeInteger(current)) {
       return paymentFailure(state, 'RESOURCE_VALUE_OUT_OF_RANGE')
     }
-    if (findActiveResourceReductionProtection(payer, cost.resourceType) !== null) {
-      continue
-    }
     if (current - cost.amount < config.minimum) {
       return paymentFailure(state, 'INSUFFICIENT_RESOURCE')
     }
   }
 
-  let temporaryState = state
+  const action = state.activeAction
+  if (action === null) return paymentFailure(state, 'RESOURCE_NO_ACTIVE_ACTION')
+  const stageEvent: BattleEvent = {
+    type: 'ACTION_STAGE_REACHED',
+    sequenceId: request.sequenceId,
+    sequenceNumber: state.personalTurn?.sequenceNumber ?? 0,
+    personalTurnId: request.personalTurnId,
+    unitId: request.payerUnitId,
+    actionId: request.actionId,
+    stage: ActionLifecycleStage.SkillResolution,
+  }
+  return {
+    ok: true,
+    state: {
+      ...state,
+      activeAction: { ...action, stage: ActionLifecycleStage.SkillResolution },
+      completedResourcePayment: {
+        resourceTransactionId: request.resourceTransactionId,
+        skillExecutionId: request.skillExecutionId,
+        actionId: request.actionId,
+        personalTurnId: request.personalTurnId,
+        sequenceId: request.sequenceId,
+        payerUnitId: request.payerUnitId,
+        reservedCosts: aggregated,
+      },
+      events: [...state.events, stageEvent],
+    },
+    events: [stageEvent],
+  }
+}
+
+function commitResourcePayment(
+  state: BattleState,
+  request: ResourcePaymentRequest,
+): PreparedPaymentResult {
+  const reserved = state.completedResourcePayment
+  const completion = state.completedSkillResolution
+  if (
+    reserved === null
+    || reserved.resourceTransactionId !== request.resourceTransactionId
+    || reserved.skillExecutionId !== request.skillExecutionId
+    || reserved.actionId !== request.actionId
+    || reserved.personalTurnId !== request.personalTurnId
+    || reserved.sequenceId !== request.sequenceId
+    || reserved.payerUnitId !== request.payerUnitId
+    || completion === null
+    || completion.skillExecutionId !== request.skillExecutionId
+  ) return paymentFailure(state, 'RESOURCE_PAYMENT_NOT_COMPLETED')
+
+  let nextState = state
   const events: BattleEvent[] = []
-  for (const cost of aggregated) {
-    const result = spendResource(temporaryState, {
+  for (const cost of reserved.reservedCosts) {
+    const result = spendResource(nextState, {
       unitId: request.payerUnitId,
-      resourceType: cost.resourceType as ResourceType,
+      resourceType: cost.resourceType,
       amount: cost.amount,
       reason: 'skillPayment',
       sourceId: String(request.skillExecutionId),
@@ -232,33 +276,13 @@ function prepareResourcePayment(
       resourceTransactionId: request.resourceTransactionId,
     })
     if (!result.ok) return paymentFailure(state, result.reason)
-    temporaryState = result.state
+    nextState = result.state
     events.push(...result.events)
-  }
-  const action = temporaryState.activeAction
-  if (action === null) return paymentFailure(state, 'RESOURCE_NO_ACTIVE_ACTION')
-  const stageEvent: BattleEvent = {
-    type: 'ACTION_STAGE_REACHED',
-    sequenceId: request.sequenceId,
-    sequenceNumber: temporaryState.personalTurn?.sequenceNumber ?? 0,
-    personalTurnId: request.personalTurnId,
-    unitId: request.payerUnitId,
-    actionId: request.actionId,
-    stage: ActionLifecycleStage.SkillResolution,
   }
   return {
     ok: true,
     state: {
-      ...temporaryState,
-      activeAction: { ...action, stage: ActionLifecycleStage.SkillResolution },
-      completedResourcePayment: {
-        resourceTransactionId: request.resourceTransactionId,
-        skillExecutionId: request.skillExecutionId,
-        actionId: request.actionId,
-        personalTurnId: request.personalTurnId,
-        sequenceId: request.sequenceId,
-        payerUnitId: request.payerUnitId,
-      },
+      ...nextState,
       resourcePaymentRegistry: {
         resourceTransactionIds: [
           ...state.resourcePaymentRegistry.resourceTransactionIds,
@@ -269,9 +293,8 @@ function prepareResourcePayment(
           request.skillExecutionId,
         ],
       },
-      events: [...temporaryState.events, stageEvent],
     },
-    events: [...events, stageEvent],
+    events,
   }
 }
 
@@ -288,17 +311,21 @@ export function resolveResourcePaidSkillTransaction(
   if (validateRandomState(state.rngState) !== null) {
     return { ok: false, state: rolledBack, events: [], reason: 'INVALID_RANDOM_STATE' }
   }
-  const prepared = prepareResourcePayment(state, payment)
-  if (!prepared.ok) {
-    return { ok: false, state, events: [], reason: prepared.reason }
+  const reserved = reserveResourcePayment(state, payment)
+  if (!reserved.ok) {
+    return { ok: false, state, events: [], reason: reserved.reason }
   }
-  const resolved = resolveSkillTransaction(prepared.state, skill)
+  const resolved = resolveReservedSkillTransaction(reserved.state, skill)
   if (!resolved.ok) {
     return { ok: false, state: rolledBack, events: [], reason: resolved.reason }
   }
+  const paid = commitResourcePayment(resolved.state, payment)
+  if (!paid.ok) {
+    return { ok: false, state: rolledBack, events: [], reason: paid.reason }
+  }
   return {
     ok: true,
-    state: resolved.state,
-    events: [...prepared.events, ...resolved.events],
+    state: paid.state,
+    events: [...reserved.events, ...resolved.events, ...paid.events],
   }
 }

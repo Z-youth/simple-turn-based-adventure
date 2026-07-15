@@ -9,7 +9,27 @@ import type {
 } from '../core/contexts'
 import type { BattleEvent } from '../core/events'
 import { TRAINING_DUMMY_BATTLE_EXTENSIONS } from './bosses/trainingDummy'
+import { LI_MUTOU_BATTLE_EXTENSIONS } from './characters/liMutou'
 import { WANG_DAHAI_BATTLE_EXTENSIONS } from './characters/wangDahai'
+import { YAN_YAN_BATTLE_EXTENSIONS } from './characters/yanYan'
+
+function runTurnStartPreSystemExtensions(
+  extensions: readonly BattleEngineExtensions[],
+  state: BattleState,
+  turn: PersonalTurnState,
+): BattleTransitionResult {
+  let currentState = state
+  const events: BattleEvent[] = []
+  for (const extension of extensions) {
+    const apply = extension.applyTurnStartPreSystemEffects
+    if (apply === undefined) continue
+    const result = apply(currentState, turn)
+    if (!result.ok) return { ...result, state, events: [] }
+    currentState = result.state
+    events.push(...result.events)
+  }
+  return { ok: true, state: currentState, events }
+}
 
 function runPassiveExtensions(
   extensions: readonly BattleEngineExtensions[],
@@ -32,6 +52,24 @@ function runPassiveExtensions(
       }
     }
     const result = apply(currentState, currentTurn)
+    if (!result.ok) return { ...result, state, events: [] }
+    currentState = result.state
+    events.push(...result.events)
+  }
+  return { ok: true, state: currentState, events }
+}
+
+function runTurnStartPostSystemExtensions(
+  extensions: readonly BattleEngineExtensions[],
+  state: BattleState,
+  turn: PersonalTurnState,
+): BattleTransitionResult {
+  let currentState = state
+  const events: BattleEvent[] = []
+  for (const extension of extensions) {
+    const apply = extension.applyTurnStartPostSystemEffects
+    if (apply === undefined) continue
+    const result = apply(currentState, turn)
     if (!result.ok) return { ...result, state, events: [] }
     currentState = result.state
     events.push(...result.events)
@@ -89,6 +127,27 @@ export function combineBattleEngineExtensions(
   ...extensions: readonly BattleEngineExtensions[]
 ): BattleEngineExtensions {
   return {
+    applySequenceStartEffects(state, sequence) {
+      let currentState = state
+      const events: BattleEvent[] = []
+      for (const extension of extensions) {
+        const result = extension.applySequenceStartEffects?.(
+          currentState,
+          sequence,
+        )
+        if (result === undefined) continue
+        if (!result.ok) return { ...result, state, events: [] }
+        currentState = result.state
+        events.push(...result.events)
+      }
+      return { ok: true, state: currentState, events }
+    },
+    applyTurnStartPreSystemEffects(state, turn) {
+      return runTurnStartPreSystemExtensions(extensions, state, turn)
+    },
+    applyTurnStartPostSystemEffects(state, turn) {
+      return runTurnStartPostSystemExtensions(extensions, state, turn)
+    },
     applyUnitPassiveEffects(state, turn) {
       return runPassiveExtensions(extensions, state, turn)
     },
@@ -110,5 +169,7 @@ export function combineBattleEngineExtensions(
 
 export const GAME_CONTENT_BATTLE_EXTENSIONS = combineBattleEngineExtensions(
   WANG_DAHAI_BATTLE_EXTENSIONS,
+  LI_MUTOU_BATTLE_EXTENSIONS,
+  YAN_YAN_BATTLE_EXTENSIONS,
   TRAINING_DUMMY_BATTLE_EXTENSIONS,
 )

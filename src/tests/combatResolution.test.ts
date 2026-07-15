@@ -144,7 +144,7 @@ describe('multi-target and multi-hit skill resolution', () => {
       .toBe(80)
   })
 
-  it('continues locked later hits on a dead target without a second death', () => {
+  it('stops later single-target hits after the target is removed', () => {
     const state = createResolvingState([
       actor(),
       enemy('target', { currentHealth: 10 }),
@@ -157,10 +157,41 @@ describe('multi-target and multi-hit skill resolution', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.events.filter((event) => event.type === 'UNIT_DIED')).toHaveLength(1)
+    expect(result.events.filter((event) => (
+      event.type === 'DAMAGE_CALCULATED'
+      && event.damage.targetUnitId === unitId('target')
+    ))).toHaveLength(1)
     const healthEvents = result.events.filter((event) => event.type === 'HEALTH_LOST')
     expect(healthEvents).toHaveLength(1)
     expect(result.state.units.find((unit) => unit.id === unitId('target')))
       .toMatchObject({ currentHealth: 0, alive: false })
+  })
+
+  it('continues group multi-hit attacks for surviving targets after one target dies', () => {
+    const state = createResolvingState([
+      actor(),
+      enemy('fragile', { currentHealth: 5 }),
+      enemy('survivor'),
+    ])
+    const result = resolveSkillTransaction(state, skillRequest(state, [
+      normalAttack('first-group', ['fragile', 'survivor']),
+      normalAttack('second-group', ['fragile', 'survivor']),
+    ]))
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const damageTargets = result.events
+      .filter((event) => event.type === 'DAMAGE_CALCULATED')
+      .map((event) => event.damage.targetUnitId)
+    expect(damageTargets).toEqual([
+      unitId('fragile'),
+      unitId('survivor'),
+      unitId('survivor'),
+    ])
+    expect(result.state.units.find((unit) => unit.id === unitId('fragile')))
+      .toMatchObject({ currentHealth: 0, alive: false })
+    expect(result.state.units.find((unit) => unit.id === unitId('survivor')))
+      .toMatchObject({ currentHealth: 60, alive: true })
   })
 
   it('finishes a locked skill even if its caster dies during the first attack', () => {
@@ -180,6 +211,36 @@ describe('multi-target and multi-hit skill resolution', () => {
     expect(result.state.units.find((unit) => unit.id === unitId('target'))?.currentHealth)
       .toBe(80)
     expect(result.events.at(-1)?.type).toBe('SKILL_RESOLUTION_COMPLETED')
+  })
+
+  it('skips the dead caster action-after and turn-end effects after its skill finishes', () => {
+    const state = createResolvingState([
+      actor({ currentHealth: 10 }),
+      enemy('target'),
+    ])
+    const resolved = resolveSkillTransaction(state, skillRequest(state, [
+      normalAttack('self-fatal', ['actor']),
+      normalAttack('after-death', ['target']),
+    ]))
+    expect(resolved.ok).toBe(true)
+    if (!resolved.ok) return
+    const completed = completeBattleAction(resolved.state, ids.action, {
+      applyAfterActionEffects(current) {
+        return {
+          ok: false,
+          state: current,
+          events: [],
+          reason: 'DEAD_CASTER_AFTER_ACTION_MUST_NOT_RUN',
+        }
+      },
+    })
+
+    expect(completed.ok).toBe(true)
+    if (!completed.ok) return
+    expect(completed.events.some((event) => (
+      event.type === 'TURN_END_STAGE_ENTERED'
+    ))).toBe(false)
+    expect(completed.state.personalTurn?.unitId).toBe(unitId('target'))
   })
 })
 
@@ -306,7 +367,7 @@ describe('generic extra damage', () => {
     expect(result.state).not.toHaveProperty('triggerLocks')
   })
 
-  it('records extra damage after lethal normal damage without duplicate death', () => {
+  it('cancels attached extra damage when the normal attack removes its target', () => {
     const state = createResolvingState([
       actor(),
       enemy('target', { currentHealth: 5 }),
@@ -328,7 +389,7 @@ describe('generic extra damage', () => {
     if (!result.ok) return
     expect(result.events.filter((event) => event.type === 'UNIT_DIED')).toHaveLength(1)
     expect(result.events.some((event) => event.type === 'EXTRA_DAMAGE_APPLIED'))
-      .toBe(true)
+      .toBe(false)
   })
 
   it('does not emit extra damage when its resolved value is zero', () => {

@@ -11,7 +11,12 @@ import {
   validateBattleEntryBaseAttack,
   validateBattleStateUnits,
 } from './combatValidation'
-import { getMomentumAttackCap } from './unitQueries'
+import {
+  getMomentumAttackBonus,
+  getMomentumAttackCap,
+  getMomentumAttackLayers,
+  getMomentumPressureLayers,
+} from './unitQueries'
 
 export type MomentumPressureErrorCode =
   | 'MOMENTUM_PRESSURE_OWNER_NOT_FOUND'
@@ -98,7 +103,19 @@ export function recalculateMomentumPressure(
   if (!Number.isFinite(momentumAttackCap) || momentumAttackCap <= 0) {
     return failure(state, 'INVALID_UNIT_BASE_ATTACK')
   }
-  const nextPressure = Math.floor(unit.momentum / momentumAttackCap)
+  const momentumAttackBonus = getMomentumAttackBonus(
+    unit.baseAttackAtBattleEntry,
+    getMomentumAttackLayers(unit),
+  )
+  const pressureLayers = getMomentumPressureLayers(unit)
+  if (!Number.isSafeInteger(momentumAttackBonus)
+    || !Number.isSafeInteger(pressureLayers)
+    || pressureLayers < 0) {
+    return failure(state, 'INVALID_MOMENTUM_PRESSURE_VALUE')
+  }
+  const nextPressure = momentumAttackBonus < momentumAttackCap
+    ? 0
+    : Math.floor(pressureLayers / 10)
   if (!Number.isSafeInteger(nextPressure)) {
     return failure(state, 'INVALID_MOMENTUM_PRESSURE_VALUE')
   }
@@ -127,6 +144,8 @@ export function recalculateMomentumPressure(
         unitId: unit.id,
         amount: shieldGain,
         reason: 'momentumPressure',
+        sourceUnitId: unit.id,
+        effectId: 'momentumPressure',
         personalTurnId: turn.personalTurnId,
         sequenceId: turn.sequenceId,
         skillExecutionId: null,

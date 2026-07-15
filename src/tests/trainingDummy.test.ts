@@ -220,14 +220,14 @@ describe('training dummy content', () => {
     if (!completed.ok) return
     expect(completed.state.units.find((unit) => (
       unit.id === TRAINING_DUMMY_UNIT_ID
-    ))).toMatchObject({ shield: 40, momentum: 10 })
+    ))).toMatchObject({ shield: 45, momentum: 10 })
     expect(completed.state.events.filter((event) => (
       event.type === 'SHIELD_GAINED'
       && event.reason === 'trainingDummySteadfast'
     ))).toHaveLength(2)
   })
 
-  it('runs pressure, passive gains, status stage, and action in exact order', () => {
+  it('runs passive shield, passive momentum, pressure, status stage, and action in exact order', () => {
     const result = startAutomatic([
       dummy({ momentum: 20, momentumPressure: 7, shield: 3 }),
       createUnit('player', { speed: 100 }),
@@ -249,16 +249,16 @@ describe('training dummy content', () => {
       return event.type
     })
 
-    expect(labels.indexOf('pressure')).toBeLessThan(
-      labels.indexOf('passiveShield'),
-    )
     expect(labels.indexOf('passiveShield')).toBeLessThan(
       labels.indexOf('passiveMomentum'),
     )
     expect(labels.indexOf('passiveMomentum')).toBeLessThan(
-      labels.indexOf(`completed:${TurnStartStage.UnitPassives}`),
+      labels.indexOf('pressure'),
     )
-    expect(labels.indexOf(`completed:${TurnStartStage.UnitPassives}`)).toBeLessThan(
+    expect(labels.indexOf('pressure')).toBeLessThan(
+      labels.indexOf(`completed:${TurnStartStage.SystemRules}`),
+    )
+    expect(labels.indexOf(`completed:${TurnStartStage.SystemRules}`)).toBeLessThan(
       labels.indexOf(`entered:${TurnStartStage.StatusEffects}`),
     )
     expect(labels.indexOf(`completed:${TurnStartStage.StatusEffects}`)).toBeLessThan(

@@ -80,9 +80,9 @@ describe('personal turn lifecycle', () => {
       .map((event) => event.stage)
 
     expect(stages).toEqual([
-      TurnStartStage.DelayedEffects,
-      TurnStartStage.SystemRules,
       TurnStartStage.UnitPassives,
+      TurnStartStage.SystemRules,
+      TurnStartStage.DelayedEffects,
       TurnStartStage.StatusEffects,
     ])
     expect(result.turn.phase).toBe(PersonalTurnPhase.AwaitingAction)
@@ -94,13 +94,13 @@ describe('personal turn lifecycle', () => {
     if (!created.ok) return
     expect(created.turn.phase).toBe(PersonalTurnPhase.NotStarted)
 
-    const delayed = requireTurn(advanceTurnStartStage(created.turn))
-    expect(delayed.phase).toBe(PersonalTurnPhase.StartingDelayedEffects)
-    const system = requireTurn(advanceTurnStartStage(delayed))
-    expect(system.phase).toBe(PersonalTurnPhase.StartingSystemRules)
-    const passives = requireTurn(advanceTurnStartStage(system))
+    const passives = requireTurn(advanceTurnStartStage(created.turn))
     expect(passives.phase).toBe(PersonalTurnPhase.StartingUnitPassives)
-    const statuses = requireTurn(advanceTurnStartStage(passives))
+    const system = requireTurn(advanceTurnStartStage(passives))
+    expect(system.phase).toBe(PersonalTurnPhase.StartingSystemRules)
+    const delayed = requireTurn(advanceTurnStartStage(system))
+    expect(delayed.phase).toBe(PersonalTurnPhase.StartingDelayedEffects)
+    const statuses = requireTurn(advanceTurnStartStage(delayed))
     expect(statuses.phase).toBe(PersonalTurnPhase.StartingStatusEffects)
     const awaiting = requireTurn(advanceTurnStartStage(statuses))
     expect(awaiting.phase).toBe(PersonalTurnPhase.AwaitingAction)

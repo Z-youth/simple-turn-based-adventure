@@ -35,6 +35,7 @@ export type TemporaryModifierDuration =
 
 export interface TemporaryAttributeModifier {
   readonly sourceId: ModifierSourceId
+  readonly sourceUnitId?: UnitId | null
   readonly attribute: TemporaryAttribute
   readonly value: number
   readonly duration: TemporaryModifierDuration
@@ -52,7 +53,8 @@ export type TemporaryModifierErrorCode =
 
 export interface ApplyTemporaryAttributeModifierRequest {
   readonly unitId: UnitId
-  readonly sourceId: ModifierSourceId
+  readonly sourceUnitId?: UnitId | null
+  readonly effectId?: ModifierSourceId
   readonly attribute: TemporaryAttribute
   readonly value: number
   readonly duration: TemporaryModifierDurationRequest
@@ -158,7 +160,8 @@ function modifierEvent(
     operation,
     unitId,
     attribute: modifier.attribute,
-    sourceId: modifier.sourceId,
+    sourceUnitId: modifier.sourceUnitId ?? null,
+    effectId: modifier.sourceId,
     value: modifier.value,
     durationKind: modifier.duration.kind,
     remainingOwnerTurns,
@@ -186,7 +189,7 @@ export function applyTemporaryAttributeModifier(
   if (!ATTRIBUTE_ORDER.includes(request.attribute)) {
     return failure(state, 'INVALID_TEMPORARY_ATTRIBUTE')
   }
-  if (typeof request.sourceId !== 'string' || request.sourceId.length === 0) {
+  if (typeof request.effectId !== 'string' || request.effectId.length === 0) {
     return failure(state, 'INVALID_TEMPORARY_MODIFIER_STATE')
   }
   if (!Number.isFinite(request.value)) {
@@ -222,7 +225,8 @@ export function applyTemporaryAttributeModifier(
     return failure(state, 'INVALID_TEMPORARY_MODIFIER_DURATION')
   }
   const modifier: TemporaryAttributeModifier = {
-    sourceId: request.sourceId,
+    sourceId: request.effectId,
+    sourceUnitId: request.sourceUnitId ?? null,
     attribute: request.attribute,
     value: request.value,
     duration,

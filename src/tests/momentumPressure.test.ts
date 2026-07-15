@@ -120,11 +120,11 @@ describe('momentum pressure turn lifecycle', () => {
   it.each([
     [10, 0, 0, 0],
     [10, 19, 0, 0],
-    [10, 20, 1, 5],
-    [10, 39, 1, 5],
+    [10, 20, 2, 10],
+    [10, 39, 3, 15],
     [20, 39, 0, 0],
-    [20, 40, 1, 5],
-    [20, 79, 1, 5],
+    [20, 40, 4, 20],
+    [20, 79, 7, 35],
   ])('with base attack %s recalculates momentum %s as pressure %s and shield %s', (
     baseAttackAtBattleEntry,
     momentum,
@@ -176,7 +176,7 @@ describe('momentum pressure turn lifecycle', () => {
     if (!started.ok) return
 
     expect(started.state.units.find((unit) => unit.id === unitId('actor')))
-      .toMatchObject({ momentumPressure: 1 })
+      .toMatchObject({ momentumPressure: 2 })
     expect(started.state.units.find((unit) => unit.id === unitId('later')))
       .toMatchObject({ momentumPressure: 7, shield: 0 })
   })
@@ -188,12 +188,12 @@ describe('momentum pressure turn lifecycle', () => {
     })
 
     expect(state.units.find((unit) => unit.id === unitId('actor')))
-      .toMatchObject({ momentumPressure: 1, shield: 9 })
+      .toMatchObject({ momentumPressure: 2, shield: 14 })
     expect(state.events.filter((event) => (
       event.type === 'MOMENTUM_PRESSURE_RECALCULATED'
-    )).at(-1)).toMatchObject({ before: 7, after: 1 })
+    )).at(-1)).toMatchObject({ before: 7, after: 2 })
     expect(state.events.filter((event) => event.type === 'SHIELD_GAINED').at(-1))
-      .toMatchObject({ amount: 5, before: 4, after: 9 })
+      .toMatchObject({ amount: 10, before: 4, after: 14 })
   })
 
   it('rejects momentum-pressure shield overflow without changing units or events', () => {
@@ -237,7 +237,7 @@ describe('momentum pressure turn lifecycle', () => {
     expect(nextActor.ok).toBe(true)
     if (!nextActor.ok) return
     expect(nextActor.state.units.find((unit) => unit.id === unitId('actor')))
-      .toMatchObject({ momentumPressure: 1, shield: 10 })
+      .toMatchObject({ momentumPressure: 2, shield: 20 })
   })
 
   it('replaces the previous turn pressure after momentum changes', () => {
@@ -248,7 +248,7 @@ describe('momentum pressure turn lifecycle', () => {
     expect(started.ok).toBe(true)
     if (!started.ok || started.state.personalTurn === null) return
     expect(started.state.units.find((unit) => unit.id === unitId('actor')))
-      .toMatchObject({ momentumPressure: 2 })
+      .toMatchObject({ momentumPressure: 4 })
     const afterActor = endCurrentPersonalTurn(
       started.state,
       started.state.personalTurn.personalTurnId,
@@ -277,7 +277,7 @@ describe('momentum pressure turn lifecycle', () => {
     expect(nextActor.ok).toBe(true)
     if (!nextActor.ok) return
     expect(nextActor.state.units.find((unit) => unit.id === unitId('actor')))
-      .toMatchObject({ momentum: 20, momentumPressure: 1 })
+      .toMatchObject({ momentum: 20, momentumPressure: 2 })
   })
 
   it('clears pressure only inside SpecialVariables and preserves other resources', () => {
@@ -406,19 +406,19 @@ describe('momentum pressure extra damage', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.state.units.find((unit) => unit.id === unitId('target')))
-      .toMatchObject({ shield: 100, currentHealth: 88 })
+      .toMatchObject({ shield: 100, currentHealth: 76 })
     const pressureDamage = result.events.find((event) => (
       event.type === 'EXTRA_DAMAGE_APPLIED'
       && event.damage.extraDamageSource === 'momentumPressure'
     ))
     expect(pressureDamage).toMatchObject({
-      damage: { resolvedValue: 12, critical: false, shieldAbsorbed: 0 },
+      damage: { resolvedValue: 24, critical: false, shieldAbsorbed: 0 },
     })
     const labels = result.events.map((event) => event.type)
     expect(labels.indexOf('MOMENTUM_PRESSURE_TRIGGERED'))
       .toBeLessThan(labels.indexOf('EXTRA_DAMAGE_APPLIED'))
     expect(result.events.find((event) => event.type === 'ATTACK_STARTED'))
-      .toMatchObject({ context: { momentumPressureSnapshot: 4 } })
+      .toMatchObject({ context: { momentumPressureSnapshot: 8 } })
     expect(result.state.rngState.cursor).toBe(state.rngState.cursor)
     expect(result.events.filter((event) => event.type === 'ATTACK_STARTED'))
       .toHaveLength(1)
@@ -435,7 +435,7 @@ describe('momentum pressure extra damage', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.state.units.find((unit) => unit.id === unitId('actor')))
-      .toMatchObject({ shield: 3, currentHealth: 97 })
+      .toMatchObject({ shield: 8, currentHealth: 94 })
   })
 
   it('triggers when normal damage is zero and ignores ordinary modifiers and protection', () => {
@@ -463,7 +463,7 @@ describe('momentum pressure extra damage', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.state.units.find((unit) => unit.id === unitId('target'))?.currentHealth)
-      .toBe(88)
+      .toBe(76)
   })
 
   it('does not trigger for a missed attack or zero pressure', () => {
@@ -499,7 +499,7 @@ describe('momentum pressure extra damage', () => {
     expect(result.events.filter((event) => event.type === 'MOMENTUM_PRESSURE_TRIGGERED'))
       .toHaveLength(1)
     expect(result.state.units.find((unit) => unit.id === unitId('target'))?.currentHealth)
-      .toBe(94)
+      .toBe(88)
     expect(result.state).not.toHaveProperty('triggerLocks')
   })
 
@@ -521,7 +521,7 @@ describe('momentum pressure extra damage', () => {
     expect(result.events.filter((event) => event.type === 'MOMENTUM_PRESSURE_TRIGGERED'))
       .toHaveLength(2)
     expect(result.state.units.filter((unit) => unit.camp === Camp.Enemy)
-      .map((unit) => unit.currentHealth)).toEqual([94, 94])
+      .map((unit) => unit.currentHealth)).toEqual([88, 88])
   })
 
   it('allows shield-value damage to trigger pressure under the same lock', () => {
@@ -546,7 +546,7 @@ describe('momentum pressure extra damage', () => {
     expect(result.events.filter((event) => event.type === 'MOMENTUM_PRESSURE_TRIGGERED'))
       .toHaveLength(1)
     expect(result.state.units.find((unit) => unit.id === unitId('target')))
-      .toMatchObject({ shield: 50, currentHealth: 94 })
+      .toMatchObject({ shield: 50, currentHealth: 88 })
   })
 
   it('keeps generic and pressure extra damage distinct in fixed order', () => {
@@ -570,7 +570,7 @@ describe('momentum pressure extra damage', () => {
       .map((event) => event.damage.extraDamageSource)
     expect(extraSources).toEqual(['generic', 'momentumPressure'])
     expect(result.state.units.find((unit) => unit.id === unitId('target'))?.currentHealth)
-      .toBe(90)
+      .toBe(84)
   })
 
   it('causes only one death and locked later hits remain harmless', () => {
@@ -587,7 +587,7 @@ describe('momentum pressure extra damage', () => {
       .toMatchObject({ currentHealth: 0, alive: false })
   })
 
-  it('records pressure extra after lethal normal damage without a second death', () => {
+  it('cancels pressure extra when the normal attack removes its target', () => {
     const state = startSkill(startPressureTurn(20, { currentHealth: 5 }))
     const result = resolve(state, [normalAttack('normal-lethal', ['target'], {
       effectiveAttack: 10,
@@ -599,7 +599,7 @@ describe('momentum pressure extra damage', () => {
     expect(result.events.filter((event) => (
       event.type === 'EXTRA_DAMAGE_APPLIED'
       && event.damage.extraDamageSource === 'momentumPressure'
-    ))).toHaveLength(1)
+    ))).toHaveLength(0)
   })
 
   it('finishes locked attacks after caster death without changing its resources', () => {
@@ -626,7 +626,7 @@ describe('momentum pressure extra damage', () => {
     expect(result.state.units.find((unit) => unit.id === unitId('actor')))
       .toMatchObject({ alive: false, energy: 3, momentum: 40 })
     expect(result.state.units.find((unit) => unit.id === unitId('target'))?.currentHealth)
-      .toBe(94)
+      .toBe(88)
   })
 
   it('releases trigger locks when a later attack fails and the transaction rolls back', () => {

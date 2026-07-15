@@ -1,9 +1,12 @@
 import type { BattleState } from './contexts'
 import type { BattleEvent } from './events'
 import type {
+  ActionId,
   AttackId,
   DamageEventId,
+  PersonalTurnId,
   SkillExecutionId,
+  TurnSequenceId,
   UnitId,
 } from './identifiers'
 import { clampMinimum, roundDecimalResult } from './rounding'
@@ -69,6 +72,18 @@ export interface UnitVitalStateRequest {
   readonly skillExecutionId: SkillExecutionId
   readonly attackId: AttackId
   readonly damageEventId: DamageEventId
+}
+
+export interface UnitHealingRequest {
+  readonly unitId: UnitId
+  readonly amount: number
+  readonly reason: string
+  readonly sourceUnitId?: UnitId | null
+  readonly effectId?: string | null
+  readonly actionId: ActionId | null
+  readonly personalTurnId: PersonalTurnId | null
+  readonly sequenceId: TurnSequenceId | null
+  readonly skillExecutionId: SkillExecutionId | null
 }
 
 export interface VitalityBattleSuccess {
@@ -292,4 +307,53 @@ export function requestUnitVitalState(
     },
     request,
   )
+}
+
+export function healUnit(
+  state: BattleState,
+  request: UnitHealingRequest,
+): VitalityBattleResult {
+  const unit = state.units.find((candidate) => candidate.id === request.unitId)
+  if (unit === undefined) {
+    return { ok: false, state, events: [], reason: 'VITALITY_UNIT_NOT_FOUND' }
+  }
+  if (!unit.alive || (!unit.hasInfiniteHealth && unit.currentHealth <= 0)) {
+    return { ok: false, state, events: [], reason: 'INVALID_VITALITY_CHANGE' }
+  }
+  if (!Number.isFinite(request.amount) || request.amount <= 0
+    || !Number.isFinite(unit.maximumHealth) || unit.maximumHealth < 0) {
+    return { ok: false, state, events: [], reason: 'INVALID_VITALITY_CHANGE' }
+  }
+  const after = roundDecimalResult(Math.min(
+    unit.currentHealth + request.amount,
+    unit.maximumHealth,
+  ))
+  const amount = roundDecimalResult(clampMinimum(after - unit.currentHealth, 0))
+  if (amount === 0) return { ok: true, state, events: [], changed: false }
+  const event: BattleEvent = {
+    type: 'HEALTH_RESTORED',
+    unitId: unit.id,
+    amount,
+    before: unit.currentHealth,
+    after,
+    reason: request.reason,
+    sourceUnitId: request.sourceUnitId ?? null,
+    effectId: request.effectId ?? null,
+    actionId: request.actionId,
+    personalTurnId: request.personalTurnId,
+    sequenceId: request.sequenceId,
+    skillExecutionId: request.skillExecutionId,
+  }
+  return {
+    ok: true,
+    state: {
+      ...state,
+      units: state.units.map((candidate) => candidate.id === unit.id
+        ? { ...candidate, currentHealth: after }
+        : candidate),
+      events: [...state.events, event],
+    },
+    events: [event],
+    changed: true,
+  }
 }

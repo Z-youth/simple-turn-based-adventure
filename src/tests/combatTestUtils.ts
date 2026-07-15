@@ -74,6 +74,7 @@ export function createResolvingState(
       personalTurnId: action.state.personalTurn.personalTurnId,
       sequenceId: activeAction.sequenceId,
       payerUnitId: activeAction.actorId,
+      reservedCosts: [],
     },
     resourcePaymentRegistry: {
       resourceTransactionIds: [resourceTransactionId],

@@ -11,3 +11,12 @@ export interface EndTurnRequest {
   readonly hasLegalAction: boolean
   readonly confirmation?: EndTurnConfirmation
 }
+
+export const TrainingExitConfirmation = {
+  NotProvided: 'notProvided',
+  Confirmed: 'confirmed',
+  Cancelled: 'cancelled',
+} as const
+
+export type TrainingExitConfirmation =
+  (typeof TrainingExitConfirmation)[keyof typeof TrainingExitConfirmation]

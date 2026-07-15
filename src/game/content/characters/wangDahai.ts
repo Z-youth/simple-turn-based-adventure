@@ -61,6 +61,7 @@ import {
   isUnitAlive,
 } from '../../core/unitQueries'
 import type { UnitState } from '../../core/units'
+import { roundIntegerResult } from '../../core/rounding'
 
 export const WANG_DAHAI_UNIT_ID = 'character:wang-dahai' as UnitId
 export const WANG_DAHAI_TIDE_COUNTER_ID =
@@ -175,6 +176,8 @@ function clearSpecialCounter(
     unitId: unit.id,
     counterId,
     amount: marker,
+    sourceUnitId: unit.id,
+    effectId: 'wangDahaiTidalBladeMomentum',
     actionId: null,
     personalTurnId: turn.personalTurnId,
     sequenceId: turn.sequenceId,
@@ -261,6 +264,8 @@ export function applyWangDahaiTurnStartPassive(
       amount: LOW_MOMENTUM_ENERGY_GAIN,
       reason: 'wangDahaiTidalBladeMomentum',
       sourceId: String(unit.id),
+      sourceUnitId: unit.id,
+      effectId: 'wangDahaiTidalBladeMomentum',
       actionId: null,
       personalTurnId: turn.personalTurnId,
       sequenceId: turn.sequenceId,
@@ -280,6 +285,8 @@ export function applyWangDahaiTurnStartPassive(
     unitId: unit.id,
     counterId: WANG_DAHAI_FREE_MYRIAD_RIVERS_MARKER_ID,
     amount: 1,
+    sourceUnitId: unit.id,
+    effectId: 'wangDahaiTidalBladeMomentum',
     actionId: null,
     personalTurnId: turn.personalTurnId,
     sequenceId: turn.sequenceId,
@@ -333,13 +340,14 @@ export function applyWangDahaiRisingMomentum(
     return { ok: true, state, events: [] }
   }
 
-  const hadDebuff = debuffStackCount(state) > 0
   const gained = gainResource(state, {
     unitId: unit.id,
     resourceType: ResourceType.Momentum,
     amount: RISING_MOMENTUM_GAIN,
     reason: RISING_MOMENTUM_REASON,
     sourceId: String(unit.id),
+    sourceUnitId: unit.id,
+    effectId: RISING_MOMENTUM_REASON,
     actionId: action.actionId,
     personalTurnId: turn.personalTurnId,
     sequenceId: turn.sequenceId,
@@ -348,26 +356,29 @@ export function applyWangDahaiRisingMomentum(
   })
   if (!gained.ok) return failure(rollbackState, gained.reason)
 
-  if (hadDebuff) {
-    const removed = removeBattleStatus(gained.state, {
-      ownerUnitId: unit.id,
-      mode: 'remove',
-      category: StatusCategory.Debuff,
-    })
-    if (!removed.ok) return failure(rollbackState, removed.reason)
-    if (debuffStackCount(removed.state) !== debuffStackCount(state) - 1) {
-      return failure(rollbackState, 'WANG_DAHAI_DEBUFF_REMOVAL_FAILED')
-    }
+  const cleansed = removeBattleStatus(gained.state, {
+    ownerUnitId: unit.id,
+    mode: 'cleanse',
+    origin: {
+      sourceUnitId: unit.id,
+      skillExecutionId: action.skillExecutionId,
+      effectId: RISING_MOMENTUM_REASON,
+    },
+  })
+  if (!cleansed.ok) return failure(rollbackState, cleansed.reason)
+
+  if (debuffStackCount(cleansed.state) > 0) {
     return {
       ok: true,
-      state: removed.state,
-      events: [...gained.events, ...removed.events],
+      state: cleansed.state,
+      events: [...gained.events, ...cleansed.events],
     }
   }
 
-  const modified = applyTemporaryAttributeModifier(gained.state, {
+  const modified = applyTemporaryAttributeModifier(cleansed.state, {
     unitId: unit.id,
-    sourceId: unit.id,
+    sourceUnitId: unit.id,
+    effectId: unit.id,
     attribute: TemporaryAttribute.Attack,
     value: RISING_ATTACK_GAIN,
     duration: { kind: 'currentPersonalTurn' },
@@ -380,7 +391,7 @@ export function applyWangDahaiRisingMomentum(
   return {
     ok: true,
     state: modified.state,
-    events: [...gained.events, ...modified.events],
+    events: [...gained.events, ...cleansed.events, ...modified.events],
   }
 }
 
@@ -402,101 +413,6 @@ export function isWangDahaiActiveSkillAllowed(
     skillId === WANG_DAHAI_FIRST_SKILL_ID
     && branchId === WANG_DAHAI_STACKING_WAVE_BRANCH_ID
   )
-}
-
-function findFirstSkillBranch(
-  state: BattleState,
-  action: ActionContext,
-): SkillBranchId | null {
-  for (let index = state.events.length - 1; index >= 0; index -= 1) {
-    const event = state.events[index]
-    if (
-      event.type === 'SKILL_RESOLUTION_STARTED'
-      && event.actionId === action.actionId
-      && event.skillExecutionId === action.skillExecutionId
-      && event.skillId === WANG_DAHAI_FIRST_SKILL_ID
-    ) return event.context?.branchId ?? null
-  }
-  return null
-}
-
-function applyStackingWaveAfterActionEffects(
-  state: BattleState,
-  action: ActionContext,
-): WangDahaiEffectResult {
-  if (
-    action.actorId !== WANG_DAHAI_UNIT_ID
-    || findFirstSkillBranch(state, action) !== WANG_DAHAI_STACKING_WAVE_BRANCH_ID
-  ) return { ok: true, state, events: [] }
-
-  const turn = state.personalTurn
-  const unit = findWangDahai(state)
-  if (
-    turn === null
-    || turn.personalTurnId !== action.personalTurnId
-    || turn.phase !== PersonalTurnPhase.AwaitingAction
-    || unit === null
-  ) return failure(state, 'WANG_DAHAI_STACKING_WAVE_INVALID_ACTION_CONTEXT')
-
-  const counted = increaseSpecialCounter(state, {
-    unitId: unit.id,
-    counterId: WANG_DAHAI_STACKING_WAVE_USE_COUNT_ID,
-    amount: 1,
-    actionId: action.actionId,
-    personalTurnId: action.personalTurnId,
-    sequenceId: action.sequenceId,
-    skillExecutionId: action.skillExecutionId,
-  })
-  if (!counted.ok) return failure(state, counted.reason)
-  const countedUnit = counted.state.units.find((candidate) => (
-    candidate.id === WANG_DAHAI_UNIT_ID
-  ))
-  if (countedUnit === undefined) return failure(state, 'WANG_DAHAI_NOT_FOUND')
-  const useCount = getWangDahaiStackingWaveUseCount(countedUnit)
-  const momentumGain = Math.min(
-    2 * useCount,
-    STACKING_WAVE_MAX_MOMENTUM_GAIN,
-  )
-  const gained = gainResource(counted.state, {
-    unitId: unit.id,
-    resourceType: ResourceType.Momentum,
-    amount: momentumGain,
-    reason: 'wangDahaiStackingWave',
-    sourceId: String(WANG_DAHAI_FIRST_SKILL_ID),
-    actionId: action.actionId,
-    personalTurnId: action.personalTurnId,
-    sequenceId: action.sequenceId,
-    skillExecutionId: action.skillExecutionId,
-    resourceTransactionId: null,
-  })
-  if (!gained.ok) return failure(state, gained.reason)
-
-  const lockValue = readSpecialCounter(
-    countedUnit,
-    WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
-  )
-  if (lockValue > 0) {
-    return {
-      ok: true,
-      state: gained.state,
-      events: [...counted.events, ...gained.events],
-    }
-  }
-  const locked = increaseSpecialCounter(gained.state, {
-    unitId: unit.id,
-    counterId: WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
-    amount: 1,
-    actionId: action.actionId,
-    personalTurnId: action.personalTurnId,
-    sequenceId: action.sequenceId,
-    skillExecutionId: action.skillExecutionId,
-  })
-  if (!locked.ok) return failure(state, locked.reason)
-  return {
-    ok: true,
-    state: locked.state,
-    events: [...counted.events, ...gained.events, ...locked.events],
-  }
 }
 
 function myriadRiversExecutionPrefix(action: ActionContext): string {
@@ -639,6 +555,8 @@ export function applyWangDahaiTurnEndEffects(
     unitId: unit.id,
     counterId: WANG_DAHAI_TIDE_COUNTER_ID,
     amount: 1,
+    sourceUnitId: unit.id,
+    effectId: WANG_DAHAI_THIRD_SKILL_ID,
     actionId: null,
     personalTurnId: turn.personalTurnId,
     sequenceId: turn.sequenceId,
@@ -659,17 +577,15 @@ export function applyWangDahaiAfterActionEffects(
   if (action.actorId !== WANG_DAHAI_UNIT_ID || !action.countsAsAction) {
     return { ok: true, state, events: [] }
   }
-  const stackingWave = applyStackingWaveAfterActionEffects(state, action)
-  if (!stackingWave.ok) return failure(state, stackingWave.reason)
   const myriadRivers = applyAutomaticWangDahaiMyriadRivers(
-    stackingWave.state,
+    state,
     action,
   )
   if (!myriadRivers.ok) return failure(state, myriadRivers.reason)
   return {
     ok: true,
     state: myriadRivers.state,
-    events: [...stackingWave.events, ...myriadRivers.events],
+    events: myriadRivers.events,
   }
 }
 
@@ -700,9 +616,40 @@ function createFirstSkillAttack(
 function firstSkillEffects(
   request: WangDahaiFirstSkillRequest,
   attack: NormalAttackRequest,
+  stackingWaveUseCount: number,
+  stackingWaveSkillAlreadyLocked: boolean,
 ): readonly SkillEffectRequest[] {
   if (request.branchId === WANG_DAHAI_STACKING_WAVE_BRANCH_ID) {
-    return [{ kind: 'attack', attack }]
+    const momentumGain = Math.min(
+      2 * stackingWaveUseCount,
+      STACKING_WAVE_MAX_MOMENTUM_GAIN,
+    )
+    return [
+      { kind: 'attack', attack },
+      {
+        kind: 'specialCounter',
+        operation: 'increase',
+        unitId: WANG_DAHAI_UNIT_ID,
+        counterId: WANG_DAHAI_STACKING_WAVE_USE_COUNT_ID,
+        amount: 1,
+      },
+      {
+        kind: 'resource',
+        operation: 'gain',
+        unitId: WANG_DAHAI_UNIT_ID,
+        resourceType: ResourceType.Momentum,
+        amount: momentumGain,
+        reason: 'wangDahaiStackingWave',
+        sourceId: String(WANG_DAHAI_FIRST_SKILL_ID),
+      },
+      ...(stackingWaveSkillAlreadyLocked ? [] : [{
+        kind: 'specialCounter' as const,
+        operation: 'increase' as const,
+        unitId: WANG_DAHAI_UNIT_ID,
+        counterId: WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
+        amount: 1,
+      }]),
+    ]
   }
   return [
     {
@@ -759,6 +706,11 @@ export function useWangDahaiFirstSkill(
 
   const momentumSnapshot = Math.floor(unit.momentum)
   const stackingWave = request.branchId === WANG_DAHAI_STACKING_WAVE_BRANCH_ID
+  const stackingWaveUseCount = getWangDahaiStackingWaveUseCount(unit) + 1
+  const stackingWaveSkillAlreadyLocked = readSpecialCounter(
+    unit,
+    WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
+  ) > 0
   const started = startBattleAction(state, {
     actionId: request.actionId,
     actorId: unit.id,
@@ -788,7 +740,12 @@ export function useWangDahaiFirstSkill(
     sequenceId: currentAction.sequenceId,
     casterId: currentUnit.id,
     attacks: [attack],
-    effects: firstSkillEffects(request, attack),
+    effects: firstSkillEffects(
+      request,
+      attack,
+      stackingWaveUseCount,
+      stackingWaveSkillAlreadyLocked,
+    ),
   }
   const resolved = resolveResourcePaidSkillTransaction(
     rising.state,
@@ -808,25 +765,30 @@ export function useWangDahaiFirstSkill(
   if (!resolved.ok) return failure(state, resolved.reason)
 
   let resolvedState = resolved.state
-  if (!stackingWave && momentumSnapshot <= 1 && momentumSnapshot > 0) {
+  if (!stackingWave && momentumSnapshot <= 1) {
     const currentTarget = resolvedState.units.find((candidate) => (
       candidate.id === request.targetUnitId
     ))
     if (currentTarget !== undefined && isUnitAlive(currentTarget)) {
-      const reduced = decreaseResource(resolvedState, {
-        unitId: currentTarget.id,
-        resourceType: ResourceType.Momentum,
-        amount: momentumSnapshot,
-        reason: 'wangDahaiNewTide',
-        sourceId: String(WANG_DAHAI_FIRST_SKILL_ID),
-        actionId: request.actionId,
-        personalTurnId: currentTurn.personalTurnId,
-        sequenceId: currentAction.sequenceId,
-        skillExecutionId: request.skillExecutionId,
-        resourceTransactionId: request.resourceTransactionId,
-      })
-      if (!reduced.ok) return failure(state, reduced.reason)
-      resolvedState = reduced.state
+      const reducedMomentum = roundIntegerResult(currentTarget.momentum / 2)
+      if (reducedMomentum !== currentTarget.momentum) {
+        const reduced = decreaseResource(resolvedState, {
+          unitId: currentTarget.id,
+          resourceType: ResourceType.Momentum,
+          amount: currentTarget.momentum - reducedMomentum,
+          reason: 'wangDahaiNewTide',
+          sourceId: String(WANG_DAHAI_FIRST_SKILL_ID),
+          sourceUnitId: currentUnit.id,
+          effectId: String(WANG_DAHAI_FIRST_SKILL_ID),
+          actionId: request.actionId,
+          personalTurnId: currentTurn.personalTurnId,
+          sequenceId: currentAction.sequenceId,
+          skillExecutionId: request.skillExecutionId,
+          resourceTransactionId: request.resourceTransactionId,
+        })
+        if (!reduced.ok) return failure(state, reduced.reason)
+        resolvedState = reduced.state
+      }
     }
   }
 
@@ -894,6 +856,7 @@ export function useWangDahaiThirdSkill(
     {
       skillExecutionId: request.skillExecutionId,
       skillId: WANG_DAHAI_THIRD_SKILL_ID,
+      resolutionKind: 'manual',
       actionId: request.actionId,
       personalTurnId: currentTurn.personalTurnId,
       sequenceId: currentAction.sequenceId,

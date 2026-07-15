@@ -40,6 +40,7 @@ import {
 } from './positionProtection'
 import { acquirePerTargetTriggerLock } from './triggerLocks'
 import type { UnitState } from './units'
+import { isUnitAlive } from './unitQueries'
 import type { RandomState } from './rng'
 import { validateRandomState } from './rng'
 import type { CombatUnitValidationErrorCode } from './combatValidation'
@@ -49,7 +50,9 @@ import {
 } from './combatValidation'
 import type { ResourceErrorCode } from './resources'
 import {
+  getResourceConfig,
   gainResource,
+  readUnitResource,
   spendResource,
   unitResourcesMatchConfiguration,
 } from './resources'
@@ -135,9 +138,15 @@ function isFiniteNumber(value: number): boolean {
 function attackNumbersAreValid(attack: AttackRequest): boolean {
   const reductionsValid = attack.targets.every((target) => (
     (target.additionalReductionSources ?? []).every(isFiniteNumber)
+    && (target.additionalReductionModifierSources ?? []).every((source) => (
+      isFiniteNumber(source.modifier)
+    ))
     && (target.extraDamage === undefined
       || (isFiniteNumber(target.extraDamage.value)
         && target.extraDamage.value >= 0))
+    && (target.extraDamage?.resourceCostAfterDamage === undefined
+      || (Number.isSafeInteger(target.extraDamage.resourceCostAfterDamage.amount)
+        && target.extraDamage.resourceCostAfterDamage.amount > 0))
   ))
   if (!reductionsValid) return false
   if (attack.damageType === DamageType.Normal) {
@@ -148,13 +157,34 @@ function attackNumbersAreValid(attack: AttackRequest): boolean {
       attack.criticalRate,
       attack.criticalDamage,
       attack.normalDamageIncrease,
+      ...(attack.normalDamageIncreaseSources ?? []).map((source) => source.modifier),
     ].every(isFiniteNumber)
   }
   if (attack.damageType === DamageType.ShieldValue) {
     return attack.baseValue >= 0
-      && [attack.baseValue, attack.normalDamageIncrease].every(isFiniteNumber)
+      && [
+        attack.baseValue,
+        attack.normalDamageIncrease,
+        ...(attack.normalDamageIncreaseSources ?? []).map((source) => source.modifier),
+      ].every(isFiniteNumber)
   }
   return false
+}
+
+function hasAvailableExtraDamageResource(
+  state: BattleState,
+  cost: NonNullable<AttackTargetRequest['extraDamage']>['resourceCostAfterDamage'],
+): boolean {
+  if (cost === undefined) return true
+  const unit = state.units.find((candidate) => candidate.id === cost.unitId)
+  const config = getResourceConfig(state.resourceConfiguration, cost.resourceType)
+  if (unit === undefined || config === undefined || !config.allowSpend) return false
+  const reserved = state.completedResourcePayment?.payerUnitId === cost.unitId
+    ? state.completedResourcePayment.reservedCosts.find((entry) => (
+        entry.resourceType === cost.resourceType
+      ))?.amount ?? 0
+    : 0
+  return readUnitResource(unit, cost.resourceType) - reserved >= cost.amount
 }
 
 function duplicateValue<Value>(values: readonly Value[]): boolean {
@@ -248,6 +278,7 @@ function validateResolutionPayload(
 function validateRequest(
   state: BattleState,
   request: SkillResolutionRequest,
+  requireCompletedPayment: boolean,
 ): SkillResolutionErrorCode | null {
   if (
     state.phase !== BattlePhase.ResolvingAction
@@ -280,9 +311,10 @@ function validateRequest(
     || payment.personalTurnId !== request.personalTurnId
     || payment.sequenceId !== request.sequenceId
     || payment.payerUnitId !== request.casterId
-    || !state.resourcePaymentRegistry.paidSkillExecutionIds.includes(
-      request.skillExecutionId,
-    )
+    || (requireCompletedPayment
+      && !state.resourcePaymentRegistry.paidSkillExecutionIds.includes(
+        request.skillExecutionId,
+      ))
   ) return 'RESOURCE_PAYMENT_NOT_COMPLETED'
   if (state.resolutionIds.skillExecutionIds.includes(request.skillExecutionId)) {
     return 'SKILL_EXECUTION_ID_ALREADY_USED'
@@ -447,11 +479,16 @@ function resolveSkillTransactionInternal(
   state: BattleState,
   request: ResolutionRequest,
   mode: 'action' | 'afterAction' | 'turnEnd',
+  requireCompletedPayment = true,
 ): SkillResolutionResult {
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)
   const invalid = mode === 'action'
-    ? validateRequest(state, request as SkillResolutionRequest)
+    ? validateRequest(
+      state,
+      request as SkillResolutionRequest,
+      requireCompletedPayment,
+    )
     : mode === 'afterAction'
       ? validateTriggeredRequest(state, request as TriggeredSkillResolutionRequest)
       : validateTurnEndTriggeredRequest(
@@ -486,7 +523,11 @@ function resolveSkillTransactionInternal(
     actionId: request.actionId,
     skillId: request.skillId,
     casterId: request.casterId,
-    ...(skillContext.branchId === null ? {} : { context: skillContext }),
+    sourceUnitId: request.casterId,
+    resolutionKind: request.resolutionKind ?? (
+      mode === 'action' ? 'manual' : 'automatic'
+    ),
+    context: skillContext,
   }]
 
   try {
@@ -512,12 +553,13 @@ function resolveSkillTransactionInternal(
           sourceId: effect.sourceId === undefined
             ? String(request.skillId)
             : effect.sourceId,
+          sourceUnitId: request.casterId,
+          effectId: String(request.skillId),
           actionId: request.actionId,
           personalTurnId: request.personalTurnId,
           sequenceId: request.sequenceId,
           skillExecutionId: request.skillExecutionId,
-          resourceTransactionId:
-            state.completedResourcePayment?.resourceTransactionId ?? null,
+          resourceTransactionId: null,
         })
         if (!changed.ok) return failure(state, changed.reason)
         units = changed.state.units
@@ -527,10 +569,19 @@ function resolveSkillTransactionInternal(
 
       if (effect.kind === 'status') {
         const changed = effect.operation === 'add'
-          ? addStatusToBattle(effectState(), effect.status)
+          ? addStatusToBattle(effectState(), effect.status, {
+              sourceUnitId: request.casterId,
+              skillExecutionId: request.skillExecutionId,
+              effectId: String(request.skillId),
+            })
           : removeBattleStatus(effectState(), {
               ownerUnitId: effect.ownerUnitId,
               mode: effect.mode,
+              origin: {
+                sourceUnitId: request.casterId,
+                skillExecutionId: request.skillExecutionId,
+                effectId: String(request.skillId),
+              },
             })
         if (!changed.ok) return failure(state, changed.reason)
         statusBatches = changed.state.statusBatches
@@ -547,6 +598,8 @@ function resolveSkillTransactionInternal(
           unitId: effect.unitId,
           counterId: effect.counterId,
           amount: effect.amount,
+          sourceUnitId: request.casterId,
+          effectId: String(request.skillId),
           actionId: request.actionId,
           personalTurnId: request.personalTurnId,
           sequenceId: request.sequenceId,
@@ -561,7 +614,8 @@ function resolveSkillTransactionInternal(
       if (effect.kind === 'temporaryAttribute') {
         const changed = applyTemporaryAttributeModifier(effectState(), {
           unitId: effect.unitId,
-          sourceId: effect.sourceId,
+          sourceUnitId: request.casterId,
+          effectId: effect.sourceId,
           attribute: effect.attribute,
           value: effect.value,
           duration: effect.duration,
@@ -577,9 +631,14 @@ function resolveSkillTransactionInternal(
       }
 
       const attack = effect.attack
+      const liveTargetRequests = attack.targets.filter((target) => {
+        const unit = units.find((candidate) => candidate.id === target.targetId)
+        return unit !== undefined && isUnitAlive(unit)
+      })
+      if (liveTargetRequests.length === 0) continue
       const snapshot = createPositionProtectionSnapshot(
         units,
-        attack.targets.map((target) => target.targetId),
+        liveTargetRequests.map((target) => target.targetId),
       )
       const currentAttacker = units.find((unit) => unit.id === request.casterId)
       if (currentAttacker === undefined) return failure(state, 'ATTACKER_NOT_FOUND')
@@ -592,8 +651,8 @@ function resolveSkillTransactionInternal(
         attackerId: request.casterId,
         attackIndex,
         damageType: attack.damageType,
-        targetIds: attack.targets.map((target) => target.targetId),
-        targets: attack.targets.map((target) => ({
+        targetIds: liveTargetRequests.map((target) => target.targetId),
+        targets: liveTargetRequests.map((target) => ({
           targetId: target.targetId,
           damageEventId: target.damageEventId,
           hit: target.hit ?? true,
@@ -604,7 +663,7 @@ function resolveSkillTransactionInternal(
       }
       events.push({ type: 'ATTACK_STARTED', context: attackContext })
 
-      for (const targetRequest of attack.targets) {
+      for (const targetRequest of liveTargetRequests) {
         if (!(targetRequest.hit ?? true)) continue
         const target = units.find((unit) => unit.id === targetRequest.targetId)
         if (target === undefined) return failure(state, 'TARGET_NOT_FOUND')
@@ -613,9 +672,22 @@ function resolveSkillTransactionInternal(
           targetRequest.targetId,
         )
         const reductions = [
-          ...target.normalDamageReductionSources.map((source) => source.reduction),
           ...(targetRequest.additionalReductionSources ?? []),
-          ...(protection === 0 ? [] : [protection]),
+        ]
+        const reductionModifierSources = [
+          ...target.normalDamageReductionSources.map((source) => ({
+            sourceId: source.sourceId,
+            modifier: source.reduction,
+          })),
+          ...(targetRequest.additionalReductionModifierSources ?? []),
+          ...(protection === 0 ? [] : [{
+            sourceId: 'system:position-protection',
+            modifier: protection,
+          }]),
+        ]
+        const normalDamageIncreaseSources = [
+          ...(currentAttacker.normalDamageIncreaseSources ?? []),
+          ...(attack.normalDamageIncreaseSources ?? []),
         ]
         let rawValue: number
         let resolvedValue: number
@@ -630,6 +702,8 @@ function resolveSkillTransactionInternal(
             criticalDamage: attack.criticalDamage,
             normalDamageIncrease: attack.normalDamageIncrease,
             reductionSources: reductions,
+            normalDamageIncreaseSources,
+            reductionModifierSources,
           }, rngState)
           if (!calculation.ok) {
             return failure(state, 'INVALID_NUMERIC_INPUT')
@@ -653,6 +727,8 @@ function resolveSkillTransactionInternal(
             baseValue: attack.baseValue,
             normalDamageIncrease: attack.normalDamageIncrease,
             reductionSources: reductions,
+            normalDamageIncreaseSources,
+            reductionModifierSources,
           })
           if (!calculation.ok) {
             return failure(state, 'INVALID_NUMERIC_INPUT')
@@ -690,6 +766,10 @@ function resolveSkillTransactionInternal(
           applied.targetWasAlreadyDead,
         )
         appendDamageEvents(events, damage, attack.attackId)
+        const updatedTarget = units.find((unit) => (
+          unit.id === targetRequest.targetId
+        ))
+        if (updatedTarget === undefined || !isUnitAlive(updatedTarget)) continue
 
         if (targetRequest.extraDamage !== undefined) {
           const extraCalculation = calculateExtraDamage(
@@ -700,6 +780,8 @@ function resolveSkillTransactionInternal(
           }
           const extraValue = extraCalculation.resolvedValue
           if (extraValue === 0) continue
+          const extraCost = targetRequest.extraDamage.resourceCostAfterDamage
+          if (!hasAvailableExtraDamageResource(effectState(), extraCost)) continue
           const lockId = targetRequest.extraDamage.triggerLockId
           if (lockId !== undefined) {
             const lockResult = acquirePerTargetTriggerLock(
@@ -756,6 +838,24 @@ function resolveSkillTransactionInternal(
               unitId: extraDamage.targetUnitId,
             })
           }
+          if (extraCost !== undefined) {
+            const paid = spendResource(effectState(), {
+              unitId: extraCost.unitId,
+              resourceType: extraCost.resourceType,
+              amount: extraCost.amount,
+              reason: extraCost.reason,
+              sourceId: extraCost.sourceId ?? String(request.skillId),
+              actionId: request.actionId,
+              personalTurnId: request.personalTurnId,
+              sequenceId: request.sequenceId,
+              skillExecutionId: request.skillExecutionId,
+              resourceTransactionId: null,
+            })
+            if (!paid.ok) return failure(state, paid.reason)
+            units = paid.state.units
+            events.push(...paid.events)
+          }
+          if (!extraApplied.alive) continue
         }
 
         const pressureExtraValue = getMomentumPressureExtraDamage(
@@ -902,7 +1002,14 @@ export function resolveSkillTransaction(
   state: BattleState,
   request: SkillResolutionRequest,
 ): SkillResolutionResult {
-  return resolveSkillTransactionInternal(state, request, 'action')
+  return resolveSkillTransactionInternal(state, request, 'action', true)
+}
+
+export function resolveReservedSkillTransaction(
+  state: BattleState,
+  request: SkillResolutionRequest,
+): SkillResolutionResult {
+  return resolveSkillTransactionInternal(state, request, 'action', false)
 }
 
 export function resolveTriggeredSkillTransaction(

@@ -46,6 +46,52 @@ describe('normal damage formula', () => {
     expect(result.resolvedValue).toBe(12)
   })
 
+  it('adds modifiers with the same name and multiplies modifiers with different names', () => {
+    const result = calculateNormalDamage({
+      effectiveAttack: 100,
+      multiplier: 1,
+      fixedDamage: 0,
+      criticalRate: 0,
+      criticalDamage: 0.5,
+      normalDamageIncrease: 0,
+      normalDamageIncreaseSources: [
+        { sourceId: 'source:a', modifier: 0.2 },
+        { sourceId: 'source:a', modifier: 0.3 },
+        { sourceId: 'source:b', modifier: 0.1 },
+      ],
+      reductionSources: [],
+      reductionModifierSources: [
+        { sourceId: 'source:c', modifier: 0.2 },
+        { sourceId: 'source:c', modifier: 0.3 },
+        { sourceId: 'source:d', modifier: 0.5 },
+      ],
+    }, createSeededRandomState(1))
+
+    expect(result).toMatchObject({
+      ok: true,
+      rawValue: 41.25,
+      resolvedValue: 41.3,
+    })
+  })
+
+  it('sets a reduction multiplier to zero when its named total reaches 100%', () => {
+    const result = calculateNormalDamage({
+      effectiveAttack: 100,
+      multiplier: 1,
+      fixedDamage: 0,
+      criticalRate: 0,
+      criticalDamage: 0.5,
+      normalDamageIncrease: 0,
+      reductionSources: [],
+      reductionModifierSources: [
+        { sourceId: 'source:block', modifier: 0.4 },
+        { sourceId: 'source:block', modifier: 0.6 },
+      ],
+    }, createSeededRandomState(1))
+
+    expect(result).toMatchObject({ ok: true, resolvedValue: 0 })
+  })
+
   it('keeps intermediate precision and rounds only the independent result', () => {
     const result = calculateNormalDamage({
       effectiveAttack: 15.6,

@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   BattlePhase,
   Camp,
+  DamageType,
   Position,
   TurnEndStage,
 } from '../game/core/enums'
-import { EndTurnConfirmation } from '../game/core/commands'
+import {
+  EndTurnConfirmation,
+  TrainingExitConfirmation,
+} from '../game/core/commands'
 import type {
   ActionId,
   ResourceTransactionId,
@@ -16,8 +20,11 @@ import {
   completeBattleAction,
   endCurrentPersonalTurn,
   requestPlayerEndTurn,
+  requestTrainingExit,
+  resetTrainingBattle,
   startBattleAction,
   startBattleSequence,
+  startTrainingBattle,
 } from '../game/core/battleEngine'
 import type { BattleEngineExtensions } from '../game/core/battleEngine'
 import type { BattleState } from '../game/core/contexts'
@@ -30,6 +37,10 @@ import { gainResource, ResourceType } from '../game/core/resources'
 import { gainShield } from '../game/core/shields'
 import { finishPersonalTurn } from '../game/core/turnLifecycle'
 import {
+  createTrainingDummy,
+  TRAINING_DUMMY_BATTLE_EXTENSIONS,
+} from '../game/content/bosses/trainingDummy'
+import {
   createBattleState,
   createUnit,
   unitId,
@@ -37,6 +48,59 @@ import {
 
 function actionId(value: string): ActionId {
   return value as ActionId
+}
+
+function completeTrainingAttack(
+  state: BattleState,
+  targetId: ReturnType<typeof unitId>,
+  id: string,
+): ReturnType<typeof completeBattleAction> {
+  const started = startBattleAction(state, {
+    actionId: actionId(`action:${id}`),
+    actorId: state.personalTurn?.unitId ?? unitId('missing'),
+    skillExecutionId: `skill-execution:${id}` as SkillExecutionId,
+    endsTurn: true,
+  })
+  if (!started.ok || started.state.personalTurn === null
+    || started.state.activeAction === null) {
+    throw new Error('Could not start training test action')
+  }
+  const resolved = resolveResourcePaidSkillTransaction(
+    started.state,
+    {
+      resourceTransactionId: `resource:${id}` as ResourceTransactionId,
+      actionId: actionId(`action:${id}`),
+      personalTurnId: started.state.personalTurn.personalTurnId,
+      sequenceId: started.state.activeAction.sequenceId,
+      skillExecutionId: `skill-execution:${id}` as SkillExecutionId,
+      payerUnitId: started.state.activeAction.actorId,
+      costs: [],
+    },
+    {
+      skillExecutionId: `skill-execution:${id}` as SkillExecutionId,
+      skillId: `skill:${id}` as SkillId,
+      actionId: actionId(`action:${id}`),
+      personalTurnId: started.state.personalTurn.personalTurnId,
+      sequenceId: started.state.activeAction.sequenceId,
+      casterId: started.state.activeAction.actorId,
+      attacks: [{
+        attackId: `attack:${id}` as import('../game/core/identifiers').AttackId,
+        damageType: DamageType.Normal,
+        effectiveAttack: 0,
+        multiplier: 0,
+        fixedDamage: 100,
+        criticalRate: 0,
+        criticalDamage: 0.5,
+        normalDamageIncrease: 0,
+        targets: [{
+          targetId,
+          damageEventId: `damage:${id}` as import('../game/core/identifiers').DamageEventId,
+        }],
+      }],
+    },
+  )
+  if (!resolved.ok) throw new Error(`Could not resolve training test action: ${resolved.reason}`)
+  return completeBattleAction(resolved.state, actionId(`action:${id}`))
 }
 
 describe('battle sequence engine', () => {
@@ -575,8 +639,8 @@ describe('battle unit turn-end effects extension', () => {
     expect(failed.state.phase).toBe(BattlePhase.AwaitingAction)
     expect(failed.state.units[0]).toMatchObject({
       energy: 0,
-      shield: 5,
-      momentumPressure: 1,
+      shield: 10,
+      momentumPressure: 2,
     })
   })
 })
@@ -1094,5 +1158,220 @@ describe('player end-turn command', () => {
     expect(requestPlayerEndTurn(resolving.state, {
       hasLegalAction: false,
     }).status).toBe('invalid')
+  })
+})
+
+describe('training battle control', () => {
+  function createTrainingState(
+    bossOverrides: Parameters<typeof createUnit>[1] = {},
+  ): BattleState {
+    return createBattleState([
+      createUnit('player', {
+        currentHealth: 50,
+        maximumHealth: 50,
+        speed: 100,
+        position: Position.Front1,
+      }),
+      createUnit('boss', {
+        camp: Camp.Enemy,
+        isBoss: true,
+        position: null,
+        speed: 1,
+        currentHealth: 50,
+        maximumHealth: 50,
+        ...bossOverrides,
+      }),
+    ])
+  }
+
+  it('pauses after the fatal skill resolves, preserves events, and does not advance the boss', () => {
+    const automaticTurns: Array<ReturnType<typeof unitId>> = []
+    const started = startTrainingBattle(createTrainingState(), {
+      runAutomaticAction(state) {
+        const turn = state.personalTurn
+        if (turn !== null) automaticTurns.push(turn.unitId)
+        return null
+      },
+      applyAfterActionEffects() {
+        throw new Error('after-action effects must not run after training pause')
+      },
+    })
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    expect(automaticTurns).toEqual([unitId('player')])
+
+    const completed = completeTrainingAttack(
+      started.state,
+      unitId('player'),
+      'pause-player',
+    )
+    expect(completed.ok).toBe(true)
+    if (!completed.ok) return
+
+    expect(completed.state.phase).toBe(BattlePhase.Paused)
+    expect(completed.state.events.map((event) => event.type)).toContain('UNIT_DIED')
+    expect(completed.state.events).toContainEqual({
+      type: 'TRAINING_PAUSED',
+      reason: 'ALL_PLAYER_UNITS_DEFEATED',
+    })
+    expect(completed.state.events.some((event) => (
+      event.type === 'TURN_END_STAGE_ENTERED'
+    ))).toBe(false)
+    expect(automaticTurns).toEqual([unitId('player')])
+
+    expect(startBattleSequence(completed.state)).toEqual({
+      ok: false,
+      state: completed.state,
+      events: [],
+      reason: 'BATTLE_NOT_ACTIVE',
+    })
+    expect(startBattleAction(completed.state, {
+      actionId: actionId('blocked-paused-action'),
+      actorId: unitId('player'),
+    }).ok).toBe(false)
+    expect(endCurrentPersonalTurn(
+      completed.state,
+      completed.state.personalTurn?.personalTurnId ?? ('missing' as never),
+    ).ok).toBe(false)
+  })
+
+  it('stops automatic training-dummy continuation after it defeats the last player', () => {
+    const started = startTrainingBattle(createBattleState([
+      createUnit('player', {
+        currentHealth: 1,
+        maximumHealth: 1,
+        speed: 1,
+      }),
+      { ...createTrainingDummy(), speed: 200 },
+    ]), TRAINING_DUMMY_BATTLE_EXTENSIONS)
+
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    expect(started.state.phase).toBe(BattlePhase.Paused)
+    expect(started.state.personalTurn?.unitId).toBe('boss:training-dummy')
+    expect(started.state.events.filter((event) => (
+      event.type === 'ACTION_STARTED'
+    ))).toHaveLength(1)
+    expect(started.state.events.some((event) => (
+      event.type === 'TURN_ENDED'
+    ))).toBe(false)
+  })
+
+  it('keeps an infinite-health boss in training but finishes after a finite-health boss is defeated', () => {
+    const infiniteStarted = startTrainingBattle(createTrainingState({
+      hasInfiniteHealth: true,
+      currentHealth: 1,
+      maximumHealth: 1,
+    }))
+    expect(infiniteStarted.ok).toBe(true)
+    if (!infiniteStarted.ok) return
+    const infiniteResult = completeTrainingAttack(
+      infiniteStarted.state,
+      unitId('boss'),
+      'infinite-boss',
+    )
+    expect(infiniteResult.ok).toBe(true)
+    if (!infiniteResult.ok) return
+    expect(infiniteResult.state.phase).not.toBe(BattlePhase.Finished)
+    expect(infiniteResult.state.units.find((unit) => unit.id === unitId('boss')))
+      .toMatchObject({ currentHealth: 1, alive: true })
+
+    const finiteStarted = startTrainingBattle(createTrainingState({
+      currentHealth: 1,
+      maximumHealth: 1,
+    }))
+    expect(finiteStarted.ok).toBe(true)
+    if (!finiteStarted.ok) return
+    const finiteResult = completeTrainingAttack(
+      finiteStarted.state,
+      unitId('boss'),
+      'finite-boss',
+    )
+    expect(finiteResult.ok).toBe(true)
+    if (!finiteResult.ok) return
+    expect(finiteResult.state.phase).toBe(BattlePhase.Finished)
+    expect(finiteResult.state.events).toContainEqual({
+      type: 'TRAINING_FINISHED',
+      reason: 'FINITE_HEALTH_BOSS_DEFEATED',
+    })
+  })
+
+  it('resets the complete training setup and immediately starts it again', () => {
+    const initial = {
+      ...createTrainingState(),
+      rngState: createFixedSequenceRandomState([0.25]),
+    }
+    const started = startTrainingBattle(initial)
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    const mutated: BattleState = {
+      ...started.state,
+      phase: BattlePhase.Paused,
+      units: started.state.units.map((unit) => (
+        unit.id === unitId('player')
+          ? {
+              ...unit,
+              currentHealth: 1,
+              shield: 99,
+              energy: 12,
+              momentum: 8,
+              momentumPressure: 3,
+            }
+          : { ...unit, currentHealth: 1, alive: false }
+      )),
+      statusAcquisitionOrders: [4],
+      actionRollbackState: started.state,
+      events: [{ type: 'TRAINING_PAUSED', reason: 'ALL_PLAYER_UNITS_DEFEATED' }],
+    }
+    const reset = resetTrainingBattle(mutated)
+    expect(reset.ok).toBe(true)
+    if (!reset.ok) return
+
+    expect(reset.state.phase).toBe(BattlePhase.AwaitingAction)
+    expect(reset.state.personalTurn?.unitId).toBe(unitId('player'))
+    expect(reset.state.units).toEqual(initial.units)
+    expect(reset.state.rngState).toEqual(initial.rngState)
+    expect(reset.state.statusBatches).toEqual(initial.statusBatches)
+    expect(reset.state.statusAcquisitionOrders).toEqual(initial.statusAcquisitionOrders)
+    expect(reset.state.activeAction).toBeNull()
+    expect(reset.state.actionRollbackState).toBeNull()
+    expect(reset.state.events.some((event) => event.type === 'TRAINING_PAUSED'))
+      .toBe(false)
+  })
+
+  it('requires exit confirmation, preserves state on cancellation, and returns an explicit mode-selection result', () => {
+    const started = startTrainingBattle(createTrainingState())
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+
+    const requested = requestTrainingExit(started.state)
+    expect(requested).toMatchObject({
+      status: 'confirmationRequired',
+      state: started.state,
+      returnToModeSelection: false,
+    })
+    const cancelled = requestTrainingExit(
+      started.state,
+      TrainingExitConfirmation.Cancelled,
+    )
+    expect(cancelled).toMatchObject({
+      status: 'cancelled',
+      state: started.state,
+      returnToModeSelection: false,
+    })
+    expect(cancelled.state).toBe(started.state)
+    const exited = requestTrainingExit(
+      started.state,
+      TrainingExitConfirmation.Confirmed,
+    )
+    expect(exited).toMatchObject({
+      status: 'exited',
+      returnToModeSelection: true,
+    })
+    expect(exited.state.phase).toBe(BattlePhase.Finished)
+    expect(exited.state.events).toContainEqual({ type: 'TRAINING_EXIT_CONFIRMED' })
+    expect(startBattleSequence(exited.state).ok).toBe(false)
+    expect(requestPlayerEndTurn(exited.state, { hasLegalAction: false }).status)
+      .toBe('invalid')
   })
 })

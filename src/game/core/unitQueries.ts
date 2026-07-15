@@ -1,5 +1,6 @@
 import { Position } from './enums'
 import type { UnitState } from './units'
+import type { MomentumReadRule } from './units'
 import { clampMinimum, clampProbabilityForRoll } from './rounding'
 import {
   TemporaryAttribute,
@@ -24,6 +25,66 @@ export function getMomentumAttackBonus(
 ): number {
   const maximumBonus = getMomentumAttackCap(baseAttackAtBattleEntry)
   return Math.min(clampMinimum(momentum, 0), maximumBonus)
+}
+
+function validMomentumReadRules(
+  rules: readonly MomentumReadRule[] | undefined,
+): rules is readonly MomentumReadRule[] {
+  if (rules === undefined || rules.length === 0) return false
+  let previousMaximum = 0
+  for (const [index, rule] of rules.entries()) {
+    const maximumValid = rule.maximumActualMomentum === null
+      ? index === rules.length - 1
+      : Number.isSafeInteger(rule.maximumActualMomentum)
+        && rule.maximumActualMomentum > previousMaximum
+    if (!maximumValid || ![
+      rule.attackLayersPerMomentum,
+      rule.effectLayersPerMomentum,
+      rule.pressureLayersPerMomentum,
+    ].every((value) => Number.isSafeInteger(value) && value > 0)) {
+      return false
+    }
+    if (rule.maximumActualMomentum !== null) {
+      previousMaximum = rule.maximumActualMomentum
+    }
+  }
+  return true
+}
+
+function getMomentumReadRule(unit: UnitState): MomentumReadRule | null {
+  const rules = unit.momentumReadRules
+  if (!validMomentumReadRules(rules)) return null
+  return rules.find((rule) => (
+    rule.maximumActualMomentum === null
+      || unit.momentum <= rule.maximumActualMomentum
+  )) ?? null
+}
+
+function getMomentumReadValue(
+  unit: UnitState,
+  kind: 'attack' | 'effect' | 'pressure',
+): number {
+  const rule = getMomentumReadRule(unit)
+  const multiplier = rule === null
+    ? 1
+    : kind === 'attack'
+      ? rule.attackLayersPerMomentum
+      : kind === 'effect'
+        ? rule.effectLayersPerMomentum
+        : rule.pressureLayersPerMomentum
+  return unit.momentum * multiplier
+}
+
+export function getMomentumAttackLayers(unit: UnitState): number {
+  return getMomentumReadValue(unit, 'attack')
+}
+
+export function getMomentumEffectLayers(unit: UnitState): number {
+  return getMomentumReadValue(unit, 'effect')
+}
+
+export function getMomentumPressureLayers(unit: UnitState): number {
+  return getMomentumReadValue(unit, 'pressure')
 }
 
 export function getEffectiveAttack(unit: UnitState): number {
@@ -51,7 +112,10 @@ export function getEffectiveAttribute(
   switch (attribute) {
     case TemporaryAttribute.Attack:
       return unit.baseAttackAtBattleEntry
-        + getMomentumAttackBonus(unit.baseAttackAtBattleEntry, unit.momentum)
+        + getMomentumAttackBonus(
+          unit.baseAttackAtBattleEntry,
+          getMomentumAttackLayers(unit),
+        )
         + modifierTotal
     case TemporaryAttribute.CriticalRate:
       return unit.criticalRate + modifierTotal

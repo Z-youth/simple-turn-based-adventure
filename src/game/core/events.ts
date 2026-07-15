@@ -50,6 +50,20 @@ export interface BattleCannotContinueEvent extends SequenceEventBase {
   readonly reason: 'NO_ELIGIBLE_UNITS'
 }
 
+export interface TrainingPausedEvent {
+  readonly type: 'TRAINING_PAUSED'
+  readonly reason: 'ALL_PLAYER_UNITS_DEFEATED' | 'MANUAL_PAUSE'
+}
+
+export interface TrainingFinishedEvent {
+  readonly type: 'TRAINING_FINISHED'
+  readonly reason: 'FINITE_HEALTH_BOSS_DEFEATED'
+}
+
+export interface TrainingExitConfirmedEvent {
+  readonly type: 'TRAINING_EXIT_CONFIRMED'
+}
+
 export interface UnitSkippedDeadEvent extends SequenceEventBase {
   readonly type: 'UNIT_SKIPPED_DEAD'
   readonly unitId: UnitId
@@ -117,6 +131,8 @@ interface SkillResolutionEventBase {
 
 export interface SkillResolutionStartedEvent extends SkillResolutionEventBase {
   readonly type: 'SKILL_RESOLUTION_STARTED'
+  readonly sourceUnitId: UnitId
+  readonly resolutionKind: 'manual' | 'automatic' | 'passive' | 'reaction'
   readonly context?: SkillContext
 }
 
@@ -194,6 +210,25 @@ export interface ResourceChangedEvent {
   readonly after: number
   readonly reason: string
   readonly sourceId: string | null
+  readonly sourceUnitId: UnitId | null
+  readonly effectId: string | null
+  readonly actionId: ActionId | null
+  readonly personalTurnId: PersonalTurnId | null
+  readonly sequenceId: TurnSequenceId | null
+  readonly skillExecutionId: SkillExecutionId | null
+  readonly resourceTransactionId: ResourceTransactionId | null
+}
+
+export interface ResourceSetEvent {
+  readonly type: 'RESOURCE_SET'
+  readonly unitId: UnitId
+  readonly resourceType: ResourceType
+  readonly before: number
+  readonly after: number
+  readonly reason: string
+  readonly sourceId: string | null
+  readonly sourceUnitId: UnitId | null
+  readonly effectId: string | null
   readonly actionId: ActionId | null
   readonly personalTurnId: PersonalTurnId | null
   readonly sequenceId: TurnSequenceId | null
@@ -209,6 +244,8 @@ export interface ResourceReductionPreventedEvent {
   readonly protectionCounterId: SpecialCounterId
   readonly reason: string
   readonly sourceId: string | null
+  readonly sourceUnitId: UnitId | null
+  readonly effectId: string | null
   readonly actionId: ActionId | null
   readonly personalTurnId: PersonalTurnId | null
   readonly sequenceId: TurnSequenceId | null
@@ -224,6 +261,8 @@ export interface SpecialCounterChangedEvent {
   readonly amount: number
   readonly before: number
   readonly after: number
+  readonly sourceUnitId: UnitId | null
+  readonly effectId: string | null
   readonly actionId: ActionId | null
   readonly personalTurnId: PersonalTurnId | null
   readonly sequenceId: TurnSequenceId | null
@@ -267,6 +306,23 @@ export interface ShieldGainedEvent {
   readonly before: number
   readonly after: number
   readonly reason: string
+  readonly sourceUnitId: UnitId | null
+  readonly effectId: string | null
+  readonly personalTurnId: PersonalTurnId | null
+  readonly sequenceId: TurnSequenceId | null
+  readonly skillExecutionId: SkillExecutionId | null
+}
+
+export interface HealthRestoredEvent {
+  readonly type: 'HEALTH_RESTORED'
+  readonly unitId: UnitId
+  readonly amount: number
+  readonly before: number
+  readonly after: number
+  readonly reason: string
+  readonly sourceUnitId: UnitId | null
+  readonly effectId: string | null
+  readonly actionId: ActionId | null
   readonly personalTurnId: PersonalTurnId | null
   readonly sequenceId: TurnSequenceId | null
   readonly skillExecutionId: SkillExecutionId | null
@@ -277,7 +333,8 @@ export interface TemporaryAttributeChangedEvent {
   readonly operation: 'applied' | 'durationDecremented' | 'removed'
   readonly unitId: UnitId
   readonly attribute: 'attack' | 'criticalRate' | 'criticalDamage'
-  readonly sourceId: ModifierSourceId
+  readonly sourceUnitId: UnitId | null
+  readonly effectId: ModifierSourceId
   readonly value: number
   readonly durationKind: 'currentPersonalTurn' | 'ownerTurns'
   readonly remainingOwnerTurns: number | null
@@ -310,12 +367,18 @@ export interface StatusChangedEvent {
   readonly previousBatchId: StatusBatchId | null
   readonly stacks: number
   readonly remainingOwnerTurns: number | null
+  readonly sourceUnitId: UnitId | null
+  readonly skillExecutionId: SkillExecutionId | null
+  readonly effectId: string | null
 }
 
 export type BattleEvent =
   | SequenceStartedEvent
   | SequenceCompletedEvent
   | BattleCannotContinueEvent
+  | TrainingPausedEvent
+  | TrainingFinishedEvent
+  | TrainingExitConfirmedEvent
   | UnitSkippedDeadEvent
   | TurnStartedEvent
   | TurnStartStageEnteredEvent
@@ -339,11 +402,13 @@ export type BattleEvent =
   | ExtraDamageAppliedEvent
   | AttackCompletedEvent
   | ResourceChangedEvent
+  | ResourceSetEvent
   | ResourceReductionPreventedEvent
   | SpecialCounterChangedEvent
   | MomentumPressureRecalculatedEvent
   | MomentumPressureClearedEvent
   | MomentumPressureTriggeredEvent
   | ShieldGainedEvent
+  | HealthRestoredEvent
   | TemporaryAttributeChangedEvent
   | StatusChangedEvent

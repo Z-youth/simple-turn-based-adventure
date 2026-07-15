@@ -69,6 +69,8 @@ export interface ShieldGainRequest {
   readonly unitId: UnitId
   readonly amount: number
   readonly reason: string
+  readonly sourceUnitId?: UnitId | null
+  readonly effectId?: string | null
   readonly personalTurnId: PersonalTurnId | null
   readonly sequenceId: TurnSequenceId | null
   readonly skillExecutionId: SkillExecutionId | null
@@ -91,6 +93,17 @@ export type ShieldGainResult = ShieldGainSuccess | ShieldGainFailure
 
 function finite(values: readonly number[]): boolean {
   return values.every(Number.isFinite)
+}
+
+function getMaximumShield(
+  maximumHealth: number,
+  hasInfiniteHealth: boolean,
+): number | null {
+  if (hasInfiniteHealth) return null
+  const maximumShield = maximumHealth * 2
+  return Number.isFinite(maximumShield) && maximumShield >= 0
+    ? maximumShield
+    : null
 }
 
 export function calculateAddedShield(
@@ -138,7 +151,14 @@ export function gainShield(
   if (typeof nextShield !== 'number') {
     return { ok: false, state, events: [], reason: nextShield.reason }
   }
-  if (Math.abs(nextShield) > Number.MAX_SAFE_INTEGER) {
+  const maximumShield = getMaximumShield(
+    unit.maximumHealth,
+    unit.hasInfiniteHealth,
+  )
+  if (
+    (!unit.hasInfiniteHealth && maximumShield === null)
+    || Math.abs(nextShield) > Number.MAX_SAFE_INTEGER
+  ) {
     return {
       ok: false,
       state,
@@ -146,13 +166,18 @@ export function gainShield(
       reason: 'INVALID_SHIELD_CALCULATION_RANGE',
     }
   }
+  const cappedShield = maximumShield === null
+    ? nextShield
+    : Math.min(nextShield, maximumShield)
   const event: BattleEvent = {
     type: 'SHIELD_GAINED',
     unitId: unit.id,
     amount: request.amount,
     before: unit.shield,
-    after: nextShield,
+    after: cappedShield,
     reason: request.reason,
+    sourceUnitId: request.sourceUnitId ?? null,
+    effectId: request.effectId ?? null,
     personalTurnId: request.personalTurnId,
     sequenceId: request.sequenceId,
     skillExecutionId: request.skillExecutionId,
@@ -162,7 +187,7 @@ export function gainShield(
     state: {
       ...state,
       units: state.units.map((candidate) => candidate.id === unit.id
-        ? { ...candidate, shield: nextShield }
+        ? { ...candidate, shield: cappedShield }
         : candidate),
       events: [...state.events, event],
     },

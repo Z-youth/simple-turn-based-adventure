@@ -33,10 +33,25 @@ export type StatusOperationResult =
   | StatusOperationSuccess
   | StatusOperationFailure
 
+export interface StatusEventOrigin {
+  readonly sourceUnitId: UnitId | null
+  readonly skillExecutionId: import('./identifiers').SkillExecutionId | null
+  readonly effectId: string | null
+}
+
+function defaultStatusOrigin(batch: StatusBatch): StatusEventOrigin {
+  return {
+    sourceUnitId: batch.sourceUnitId,
+    skillExecutionId: null,
+    effectId: String(batch.statusId),
+  }
+}
+
 function statusEvent(
   type: StatusChangeKind,
   batch: StatusBatch,
   previousBatchId: StatusBatchId | null = null,
+  origin: StatusEventOrigin = defaultStatusOrigin(batch),
 ): BattleEvent {
   return {
     type,
@@ -47,6 +62,7 @@ function statusEvent(
     previousBatchId,
     stacks: batch.stacks,
     remainingOwnerTurns: batch.remainingOwnerTurns,
+    ...origin,
   }
 }
 
@@ -118,6 +134,7 @@ function earliestBatch(
 function addStatusBatch(
   batches: readonly StatusBatch[],
   incoming: StatusBatch,
+  origin: StatusEventOrigin,
 ): StatusOperationResult {
   const invalidExisting = validateExistingBatches(batches)
   if (invalidExisting !== null) {
@@ -137,7 +154,7 @@ function addStatusBatch(
     return {
       ok: true,
       batches,
-      events: [statusEvent('STATUS_REJECTED', normalizedIncoming)],
+      events: [statusEvent('STATUS_REJECTED', normalizedIncoming, null, origin)],
       changed: false,
     }
   }
@@ -159,7 +176,7 @@ function addStatusBatch(
       batches: batches.map((batch) => (
         batch.batchId === existing.batchId ? refreshed : batch
       )),
-      events: [statusEvent('STATUS_DURATION_REFRESHED', refreshed)],
+      events: [statusEvent('STATUS_DURATION_REFRESHED', refreshed, null, origin)],
       changed: true,
     }
   }
@@ -187,6 +204,7 @@ function addStatusBatch(
         'STATUS_BATCH_REPLACED',
         normalizedIncoming,
         previous?.batchId ?? null,
+        origin,
       )],
       changed: true,
     }
@@ -214,7 +232,7 @@ function addStatusBatch(
         batches: batches.map((batch) => (
           batch.batchId === equivalent.batchId ? merged : batch
         )),
-        events: [statusEvent('STATUS_BATCH_MERGED', merged)],
+        events: [statusEvent('STATUS_BATCH_MERGED', merged, null, origin)],
         changed: true,
       }
     }
@@ -235,7 +253,7 @@ function addStatusBatch(
   return {
     ok: true,
     batches: [...batches, normalizedIncoming],
-    events: [statusEvent('STATUS_ACQUIRED', normalizedIncoming)],
+    events: [statusEvent('STATUS_ACQUIRED', normalizedIncoming, null, origin)],
     changed: true,
   }
 }
@@ -281,21 +299,25 @@ function decrementStatusDurations(
   }
 }
 
-export type RemoveStatusInput = {
+export type RemoveStatusInput = ({
   readonly ownerUnitId: UnitId
   readonly mode: 'cleanse' | 'dispel'
 } | {
   readonly ownerUnitId: UnitId
   readonly mode: 'remove'
   readonly category: StatusCategory
-}
+  readonly statusId?: StatusId
+}) & { readonly origin?: StatusEventOrigin }
 
 function isRemovable(batch: StatusBatch, input: RemoveStatusInput): boolean {
   if (batch.ownerUnitId !== input.ownerUnitId) return false
   if (input.mode === 'cleanse') {
     return batch.category === StatusCategory.Debuff && batch.canBeCleansed
   }
-  if (input.mode === 'remove') return batch.category === input.category
+  if (input.mode === 'remove') {
+    return batch.category === input.category
+      && (input.statusId === undefined || batch.statusId === input.statusId)
+  }
   return batch.category === StatusCategory.Buff && batch.canBeDispelled
 }
 
@@ -325,8 +347,8 @@ function removeOneStatusLayer(
       ok: true,
       batches: batches.filter((batch) => batch.batchId !== target.batchId),
       events: [
-        statusEvent(operationType, target),
-        statusEvent('STATUS_BATCH_REMOVED', { ...target, stacks: 0 }),
+        statusEvent(operationType, target, null, input.origin),
+        statusEvent('STATUS_BATCH_REMOVED', { ...target, stacks: 0 }, null, input.origin),
       ],
       changed: true,
     }
@@ -339,8 +361,8 @@ function removeOneStatusLayer(
       batch.batchId === target.batchId ? reduced : batch
     )),
     events: [
-      statusEvent(operationType, reduced),
-      statusEvent('STATUS_STACK_REMOVED', reduced),
+        statusEvent(operationType, reduced, null, input.origin),
+        statusEvent('STATUS_STACK_REMOVED', reduced, null, input.origin),
     ],
     changed: true,
   }
@@ -421,6 +443,7 @@ function commitStatusOperation(
 export function addStatusToBattle(
   state: BattleState,
   incoming: StatusBatch,
+  origin: StatusEventOrigin = defaultStatusOrigin(incoming),
 ): BattleStatusResult {
   if (!state.units.some((unit) => unit.id === incoming.ownerUnitId)) {
     return {
@@ -434,7 +457,7 @@ export function addStatusToBattle(
   if (invalidRegistry !== null) {
     return { ok: false, state, events: [], reason: invalidRegistry }
   }
-  const operation = addStatusBatch(state.statusBatches, incoming)
+  const operation = addStatusBatch(state.statusBatches, incoming, origin)
   if (!operation.ok) return commitStatusOperation(state, operation)
   const createsBatch = operation.events.some((event) => (
     event.type === 'STATUS_ACQUIRED'

@@ -47,7 +47,10 @@ const skillExecutionId = 'skill-execution:resource' as SkillExecutionId
 const skillId = 'skill:resource' as SkillId
 const specialCounterId = 'counter:resource-test' as SpecialCounterId
 
-function setup(overrides = {}) {
+function setup(
+  overrides = {},
+  countsAsAction = true,
+) {
   const awaiting = startBattleSequence(createBattleState([
     createUnit('actor', {
       speed: 200,
@@ -65,6 +68,7 @@ function setup(overrides = {}) {
     actionId,
     actorId: unitId('actor'),
     skillExecutionId,
+    countsAsAction,
     endsTurn: false,
   })
   if (!resolving.ok) throw new Error('Could not start resource test action')
@@ -173,7 +177,7 @@ describe('resource payment lifecycle', () => {
     })
   })
 
-  it('atomically pays multiple resources and resolves the skill', () => {
+  it('reserves multiple resources and pays them after the skill resolves', () => {
     const { resolving } = setup()
     const result = resolveResourcePaidSkillTransaction(
       resolving,
@@ -191,7 +195,7 @@ describe('resource payment lifecycle', () => {
         expect.objectContaining({ resourceType: 'momentum', amount: 3 }),
       ])
     expect(result.events.map((event) => event.type).indexOf('RESOURCE_SPENT'))
-      .toBeLessThan(result.events.map((event) => event.type)
+      .toBeGreaterThan(result.events.map((event) => event.type)
         .indexOf('SKILL_RESOLUTION_STARTED'))
     expect(result.state.completedResourcePayment).not.toBeNull()
     expect(result.state.completedSkillResolution).not.toBeNull()
@@ -338,9 +342,9 @@ describe('resource payment lifecycle', () => {
       .toBe(skillExecutionId)
   })
 
-  it('completes protected resource payment without reducing the resource', () => {
+  it('records a prevented payment after resolving without reducing the resource', () => {
     const { resolving } = setup({
-      momentum: 1,
+      momentum: 99,
       specialCounters: [{ counterId: specialCounterId, value: 1 }],
       resourceReductionProtections: [{
         resourceType: ResourceType.Momentum,
@@ -357,7 +361,7 @@ describe('resource payment lifecycle', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.state.units.find((unit) => unit.id === unitId('actor')))
-      .toMatchObject({ momentum: 1 })
+      .toMatchObject({ momentum: 99 })
     expect(result.events).toContainEqual(expect.objectContaining({
       type: 'RESOURCE_REDUCTION_PREVENTED',
       resourceType: ResourceType.Momentum,
@@ -366,6 +370,54 @@ describe('resource payment lifecycle', () => {
     }))
     expect(result.state.completedResourcePayment).not.toBeNull()
     expect(result.state.completedSkillResolution).not.toBeNull()
+  })
+
+  it('does not let skill effects spend resources reserved for its final payment', () => {
+    const { awaiting, resolving } = setup({ energy: 5 })
+    const result = resolveResourcePaidSkillTransaction(
+      resolving,
+      payment(resolving, [{ resourceType: ResourceType.Energy, amount: 4 }]),
+      {
+        ...skill(resolving),
+        effects: [{
+          kind: 'resource',
+          operation: 'spend',
+          unitId: unitId('actor'),
+          resourceType: ResourceType.Energy,
+          amount: 2,
+          reason: 'cannot-use-reserved-energy',
+        }],
+      },
+    )
+
+    expect(result).toEqual({
+      ok: false,
+      state: awaiting,
+      events: [],
+      reason: 'INSUFFICIENT_RESOURCE',
+    })
+    expect(result.state.units).toBe(awaiting.units)
+    expect(result.state.events).toBe(awaiting.events)
+    expect(result.state.rngState).toBe(awaiting.rngState)
+    expect(result.state.activeAction).toBeNull()
+    expect(result.state.completedResourcePayment).toBeNull()
+  })
+
+  it('uses the same deferred payment point for a non-counting automatic action', () => {
+    const { resolving } = setup({}, false)
+    const result = resolveResourcePaidSkillTransaction(
+      resolving,
+      payment(resolving, [{ resourceType: ResourceType.Energy, amount: 2 }]),
+      skill(resolving),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.units.find((unit) => unit.id === unitId('actor')))
+      .toMatchObject({ energy: 3 })
+    expect(result.events.map((event) => event.type).indexOf('RESOURCE_SPENT'))
+      .toBeGreaterThan(result.events.map((event) => event.type)
+        .indexOf('SKILL_RESOLUTION_COMPLETED'))
   })
 
   it('returns the exact input state when any resource is insufficient before payment', () => {
@@ -821,6 +873,35 @@ describe('payment and skill atomicity', () => {
     expect(result.events).toEqual([])
   })
 
+  it('rolls the completed skill and reservation back when final payment cannot occur', () => {
+    const { awaiting, resolving } = setup({ currentHealth: 5 })
+    const request = skill(resolving, {
+      targets: [{
+        targetId: unitId('actor'),
+        damageEventId: 'damage:payment-owner-dead' as DamageEventId,
+      }],
+    })
+    const result = resolveResourcePaidSkillTransaction(
+      resolving,
+      payment(resolving, [{ resourceType: ResourceType.Energy, amount: 2 }]),
+      request,
+    )
+
+    expect(result).toEqual({
+      ok: false,
+      state: awaiting,
+      events: [],
+      reason: 'RESOURCE_OWNER_DEAD',
+    })
+    expect(result.state.units).toBe(awaiting.units)
+    expect(result.state.events).toBe(awaiting.events)
+    expect(result.state.rngState).toBe(awaiting.rngState)
+    expect(result.state.activeAction).toBeNull()
+    expect(result.state.completedResourcePayment).toBeNull()
+    expect(result.state.completedSkillResolution).toBeNull()
+    expect(result.state.resourcePaymentRegistry).toBe(awaiting.resourcePaymentRegistry)
+  })
+
   it('rolls normal damage, pressure lock, payment, events, and RNG back when pressure damage overflows', () => {
     const initial = setup()
     const rng = createFixedSequenceRandomState([0.25])
@@ -894,6 +975,7 @@ describe('payment and skill atomicity', () => {
                 ?? payment(resolving).personalTurnId,
               sequenceId: payment(resolving).sequenceId,
               payerUnitId: unitId('actor'),
+              reservedCosts: [],
             },
           }
         : {
@@ -924,7 +1006,7 @@ describe('payment and skill atomicity', () => {
     },
   )
 
-  it('rolls a lethal first attack and resource payment back when a later attack fails', () => {
+  it('rolls a lethal first attack and resource payment back when a later live-target attack fails', () => {
     const initial = setup()
     const withFragileTarget = (state: BattleState): BattleState => ({
       ...state,
@@ -952,9 +1034,10 @@ describe('payment and skill atomicity', () => {
           {
             ...first,
             attackId: 'attack:after-death' as AttackId,
-            criticalRate: 0.5,
+            effectiveAttack: Number.MAX_VALUE,
+            multiplier: 2,
             targets: [{
-              targetId: unitId('target'),
+              targetId: unitId('actor'),
               damageEventId: 'damage:after-death' as DamageEventId,
             }],
           },
@@ -1106,8 +1189,6 @@ describe('payment and skill atomicity', () => {
       'ACTION_STARTED',
       'ACTION_STAGE_REACHED:onAction',
       'ACTION_STAGE_REACHED:resourceValidationAndPayment',
-      'RESOURCE_SPENT:energy',
-      'RESOURCE_SPENT:momentum',
       'ACTION_STAGE_REACHED:skillResolution',
       'SKILL_RESOLUTION_STARTED',
       'ATTACK_STARTED',
@@ -1116,6 +1197,8 @@ describe('payment and skill atomicity', () => {
       'HEALTH_LOST',
       'ATTACK_COMPLETED',
       'SKILL_RESOLUTION_COMPLETED',
+      'RESOURCE_SPENT:energy',
+      'RESOURCE_SPENT:momentum',
       'ACTION_STAGE_REACHED:afterAction',
       'ACTION_COMPLETED',
     ])

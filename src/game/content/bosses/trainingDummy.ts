@@ -243,6 +243,8 @@ export function applyTrainingDummyTurnStartPassives(
     unitId: dummy.id,
     amount: TRAINING_DUMMY_SHIELD_GAIN,
     reason: 'trainingDummySteadfast',
+    sourceUnitId: dummy.id,
+    effectId: 'trainingDummySteadfast',
     personalTurnId: turn.personalTurnId,
     sequenceId: turn.sequenceId,
     skillExecutionId: null,
@@ -254,6 +256,8 @@ export function applyTrainingDummyTurnStartPassives(
     amount: TRAINING_DUMMY_MOMENTUM_GAIN,
     reason: 'trainingDummyMomentum',
     sourceId: String(dummy.id),
+    sourceUnitId: dummy.id,
+    effectId: 'trainingDummyMomentum',
     actionId: null,
     personalTurnId: turn.personalTurnId,
     sequenceId: turn.sequenceId,
@@ -309,7 +313,8 @@ export function runTrainingDummyAutomaticTurn(
 
   const skill: SkillResolutionRequest = {
     skillExecutionId: ids.skillExecutionId,
-    skillId: TRAINING_DUMMY_REVENGE_SKILL_ID,
+      skillId: TRAINING_DUMMY_REVENGE_SKILL_ID,
+      resolutionKind: 'automatic',
     actionId: ids.actionId,
     personalTurnId: personalTurn.personalTurnId,
     sequenceId: activeAction.sequenceId,

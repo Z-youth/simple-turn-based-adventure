@@ -73,6 +73,18 @@ export interface ResourceChangeRequest extends ResourceContextIds {
   readonly amount: number
   readonly reason: string
   readonly sourceId: string | null
+  readonly sourceUnitId?: UnitId | null
+  readonly effectId?: string | null
+}
+
+export interface ResourceSetRequest extends ResourceContextIds {
+  readonly unitId: UnitId
+  readonly resourceType: ResourceType
+  readonly value: number
+  readonly reason: string
+  readonly sourceId: string | null
+  readonly sourceUnitId?: UnitId | null
+  readonly effectId?: string | null
 }
 
 export interface ResourceCost {
@@ -332,6 +344,21 @@ function validateAmount(amount: number): ResourceErrorCode | null {
     : 'INVALID_RESOURCE_AMOUNT'
 }
 
+function getReservedResourceAmount(
+  state: BattleState,
+  request: ResourceChangeRequest,
+): number {
+  const payment = state.completedResourcePayment
+  if (
+    payment === null
+    || payment.payerUnitId !== request.unitId
+    || payment.resourceTransactionId === request.resourceTransactionId
+  ) return 0
+  return payment.reservedCosts.find((cost) => (
+    cost.resourceType === request.resourceType
+  ))?.amount ?? 0
+}
+
 function changeResource(
   state: BattleState,
   request: ResourceChangeRequest,
@@ -379,6 +406,8 @@ function changeResource(
         protectionCounterId: protection.counterId,
         reason: request.reason,
         sourceId: request.sourceId,
+        sourceUnitId: request.sourceUnitId ?? null,
+        effectId: request.effectId ?? request.reason,
         actionId: request.actionId,
         personalTurnId: request.personalTurnId,
         sequenceId: request.sequenceId,
@@ -391,6 +420,12 @@ function changeResource(
         events: [event],
       }
     }
+  }
+  const reservedAmount = kind === 'spend'
+    ? getReservedResourceAmount(state, request)
+    : 0
+  if (kind === 'spend' && before - reservedAmount - request.amount < config.minimum) {
+    return failure(state, 'INSUFFICIENT_RESOURCE')
   }
   const rawAfter = kind === 'gain'
     ? before + request.amount
@@ -420,6 +455,8 @@ function changeResource(
     after,
     reason: request.reason,
     sourceId: request.sourceId,
+    sourceUnitId: request.sourceUnitId ?? null,
+    effectId: request.effectId ?? request.reason,
     actionId: request.actionId,
     personalTurnId: request.personalTurnId,
     sequenceId: request.sequenceId,
@@ -451,4 +488,66 @@ export function spendResource(
   request: ResourceChangeRequest,
 ): ResourceChangeResult {
   return changeResource(state, request, 'spend')
+}
+
+export function setResource(
+  state: BattleState,
+  request: ResourceSetRequest,
+): ResourceChangeResult {
+  const invalidConfiguration = validateResourceConfiguration(
+    state.resourceConfiguration,
+  )
+  if (invalidConfiguration !== null) return failure(state, invalidConfiguration)
+  if (!Number.isSafeInteger(request.value)) {
+    return failure(state, 'INVALID_RESOURCE_AMOUNT')
+  }
+  const unit = state.units.find((candidate) => candidate.id === request.unitId)
+  if (unit === undefined) return failure(state, 'RESOURCE_OWNER_NOT_FOUND')
+  if (!unit.alive || (!unit.hasInfiniteHealth && unit.currentHealth <= 0)) {
+    return failure(state, 'RESOURCE_OWNER_DEAD')
+  }
+  const invalidProtection = validateUnitResourceReductionProtections(unit)
+  if (invalidProtection !== null) return failure(state, invalidProtection)
+  const config = getResourceConfig(state.resourceConfiguration, request.resourceType)
+  if (config === undefined) return failure(state, 'RESOURCE_NOT_SUPPORTED')
+  if (config.systemDerived) return failure(state, 'RESOURCE_OPERATION_NOT_ALLOWED')
+  if (request.value < config.minimum
+    || (config.maximum !== null && request.value > config.maximum)) {
+    return failure(state, 'RESOURCE_VALUE_OUT_OF_RANGE')
+  }
+  const before = readUnitResource(unit, request.resourceType)
+  if (!Number.isSafeInteger(before)
+    || before < config.minimum
+    || (config.maximum !== null && before > config.maximum)) {
+    return failure(state, 'RESOURCE_VALUE_OUT_OF_RANGE')
+  }
+  if (before === request.value) return { ok: true, state, events: [] }
+  const replacement = replaceUnitResource(unit, request.resourceType, request.value)
+  const event: BattleEvent = {
+    type: 'RESOURCE_SET',
+    unitId: unit.id,
+    resourceType: request.resourceType,
+    before,
+    after: request.value,
+    reason: request.reason,
+    sourceId: request.sourceId,
+    sourceUnitId: request.sourceUnitId ?? null,
+    effectId: request.effectId ?? request.reason,
+    actionId: request.actionId,
+    personalTurnId: request.personalTurnId,
+    sequenceId: request.sequenceId,
+    skillExecutionId: request.skillExecutionId,
+    resourceTransactionId: request.resourceTransactionId,
+  }
+  return {
+    ok: true,
+    state: {
+      ...state,
+      units: state.units.map((candidate) => (
+        candidate.id === unit.id ? replacement : candidate
+      )),
+      events: [...state.events, event],
+    },
+    events: [event],
+  }
 }

@@ -12,9 +12,9 @@ import type { UnitState } from './units'
 import { validateBattleRuntimeUnits } from './combatValidation'
 
 export const TURN_START_STAGE_ORDER: readonly TurnStartStageType[] = [
-  TurnStartStage.DelayedEffects,
-  TurnStartStage.SystemRules,
   TurnStartStage.UnitPassives,
+  TurnStartStage.SystemRules,
+  TurnStartStage.DelayedEffects,
   TurnStartStage.StatusEffects,
 ]
 
@@ -158,37 +158,40 @@ export function advanceTurnStartStage(
     case PersonalTurnPhase.NotStarted:
       return {
         ok: true,
-        turn: { ...turn, phase: PersonalTurnPhase.StartingDelayedEffects },
-        events: [startStageEnteredEvent(turn, TurnStartStage.DelayedEffects)],
-      }
-    case PersonalTurnPhase.StartingDelayedEffects:
-      return {
-        ok: true,
-        turn: { ...turn, phase: PersonalTurnPhase.StartingSystemRules },
-        events: [
-          startStageCompletedEvent(turn, TurnStartStage.DelayedEffects),
-          startStageEnteredEvent(turn, TurnStartStage.SystemRules),
-        ],
-      }
-    case PersonalTurnPhase.StartingSystemRules:
-      return {
-        ok: true,
         turn: { ...turn, phase: PersonalTurnPhase.StartingUnitPassives },
-        events: [
-          startStageCompletedEvent(turn, TurnStartStage.SystemRules),
-          startStageEnteredEvent(turn, TurnStartStage.UnitPassives),
-        ],
+        events: [startStageEnteredEvent(turn, TurnStartStage.UnitPassives)],
       }
     case PersonalTurnPhase.StartingUnitPassives:
       return {
         ok: true,
         turn: {
           ...turn,
-          phase: PersonalTurnPhase.StartingStatusEffects,
+          phase: PersonalTurnPhase.StartingSystemRules,
           unitPassiveEffectsApplied: true,
         },
         events: [
           startStageCompletedEvent(turn, TurnStartStage.UnitPassives),
+          startStageEnteredEvent(turn, TurnStartStage.SystemRules),
+        ],
+      }
+    case PersonalTurnPhase.StartingSystemRules:
+      return {
+        ok: true,
+        turn: { ...turn, phase: PersonalTurnPhase.StartingDelayedEffects },
+        events: [
+          startStageCompletedEvent(turn, TurnStartStage.SystemRules),
+          startStageEnteredEvent(turn, TurnStartStage.DelayedEffects),
+        ],
+      }
+    case PersonalTurnPhase.StartingDelayedEffects:
+      return {
+        ok: true,
+        turn: {
+          ...turn,
+          phase: PersonalTurnPhase.StartingStatusEffects,
+        },
+        events: [
+          startStageCompletedEvent(turn, TurnStartStage.DelayedEffects),
           startStageEnteredEvent(turn, TurnStartStage.StatusEffects),
         ],
       }

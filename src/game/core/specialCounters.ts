@@ -32,6 +32,8 @@ export interface SpecialCounterChangeRequest {
   readonly unitId: UnitId
   readonly counterId: SpecialCounterId
   readonly amount: number
+  readonly sourceUnitId?: UnitId | null
+  readonly effectId?: string | null
   readonly actionId: ActionId | null
   readonly personalTurnId: PersonalTurnId | null
   readonly sequenceId: TurnSequenceId | null
@@ -145,6 +147,8 @@ function changeSpecialCounter(
     amount,
     before,
     after,
+    sourceUnitId: request.sourceUnitId ?? null,
+    effectId: request.effectId ?? null,
     actionId: request.actionId,
     personalTurnId: request.personalTurnId,
     sequenceId: request.sequenceId,

@@ -8,9 +8,21 @@ import type { TemporaryAttributeModifier } from './temporaryModifiers'
 
 export type ModifierSourceId = SkillId | StatusId | UnitId
 
+export interface NormalDamageModifierSource {
+  readonly sourceId: string
+  readonly modifier: number
+}
+
 export interface NormalDamageReductionSource {
   readonly sourceId: ModifierSourceId
   readonly reduction: number
+}
+
+export interface MomentumReadRule {
+  readonly maximumActualMomentum: number | null
+  readonly attackLayersPerMomentum: number
+  readonly effectLayersPerMomentum: number
+  readonly pressureLayersPerMomentum: number
 }
 
 export interface UnitState {
@@ -31,11 +43,13 @@ export interface UnitState {
   readonly criticalRate: number
   readonly criticalDamage: number
   readonly normalDamageIncrease: number
+  readonly normalDamageIncreaseSources?: readonly NormalDamageModifierSource[]
   readonly normalDamageReductionSources: readonly NormalDamageReductionSource[]
   readonly extraDamageIncrease: number
   readonly extraDamageReduction: number
   readonly energy: number
   readonly momentum: number
+  readonly momentumReadRules?: readonly MomentumReadRule[]
   readonly intent: number
   readonly magic: number
   readonly momentumPressure: number

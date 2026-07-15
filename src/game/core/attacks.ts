@@ -15,6 +15,7 @@ import type {
 import type { ResourceType } from './resources'
 import type { StatusBatch } from './statuses'
 import type { ModifierSourceId } from './units'
+import type { NormalDamageModifierSource } from './units'
 import type {
   TemporaryAttribute,
   TemporaryModifierDurationRequest,
@@ -24,6 +25,15 @@ export interface ExtraDamageRequest {
   readonly damageEventId: DamageEventId
   readonly value: number
   readonly triggerLockId?: TriggerLockId
+  readonly resourceCostAfterDamage?: ExtraDamageResourceCost
+}
+
+export interface ExtraDamageResourceCost {
+  readonly unitId: UnitId
+  readonly resourceType: ResourceType
+  readonly amount: number
+  readonly reason: string
+  readonly sourceId?: string | null
 }
 
 export interface AttackTargetRequest {
@@ -31,6 +41,7 @@ export interface AttackTargetRequest {
   readonly damageEventId: DamageEventId
   readonly hit?: boolean
   readonly additionalReductionSources?: readonly number[]
+  readonly additionalReductionModifierSources?: readonly NormalDamageModifierSource[]
   readonly extraDamage?: ExtraDamageRequest
 }
 
@@ -47,12 +58,14 @@ export interface NormalAttackRequest extends AttackRequestBase {
   readonly criticalRate: number
   readonly criticalDamage: number
   readonly normalDamageIncrease: number
+  readonly normalDamageIncreaseSources?: readonly NormalDamageModifierSource[]
 }
 
 export interface ShieldValueAttackRequest extends AttackRequestBase {
   readonly damageType: 'shieldValue'
   readonly baseValue: number
   readonly normalDamageIncrease: number
+  readonly normalDamageIncreaseSources?: readonly NormalDamageModifierSource[]
 }
 
 export type AttackRequest = NormalAttackRequest | ShieldValueAttackRequest
@@ -118,6 +131,7 @@ export interface SkillResolutionRequest {
   readonly personalTurnId: PersonalTurnId
   readonly sequenceId: TurnSequenceId
   readonly casterId: UnitId
+  readonly resolutionKind?: 'manual' | 'automatic' | 'passive' | 'reaction'
   readonly attacks: readonly AttackRequest[]
   readonly effects?: readonly SkillEffectRequest[]
 }

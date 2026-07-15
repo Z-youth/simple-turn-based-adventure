@@ -174,6 +174,7 @@ function debuff(
   name: string,
   acquisitionOrder: number,
   stacks = 1,
+  canBeCleansed = false,
 ): StatusBatch {
   return {
     batchId: `status-batch:${name}` as StatusBatchId,
@@ -189,7 +190,7 @@ function debuff(
     skipNextTurnEndDecrement: false,
     stackPolicy: StackPolicy.Independent,
     category: StatusCategory.Debuff,
-    canBeCleansed: false,
+    canBeCleansed,
     canBeDispelled: false,
   }
 }
@@ -303,8 +304,8 @@ describe('Wang Dahai turn-start passive', () => {
 })
 
 describe('Wang Dahai Rising Momentum passive', () => {
-  it('gains momentum and removes one earliest debuff layer without attack gain', () => {
-    const first = debuff('first', 1, 2)
+  it('gains momentum, cleanses one earliest cleanseable debuff layer, then blocks attack gain when a debuff remains', () => {
+    const first = debuff('first', 1, 2, true)
     const second = debuff('second', 2)
     const awaiting = setup({}, {
       statusBatches: [first, second],
@@ -334,8 +335,62 @@ describe('Wang Dahai Rising Momentum passive', () => {
     ])
     expect(result.events.findIndex((event) => event.type === 'RESOURCE_GAINED'))
       .toBeLessThan(result.events.findIndex((event) => (
-        event.type === 'STATUS_REMOVED'
+        event.type === 'STATUS_CLEANSED'
       )))
+  })
+
+  it('gains attack only after its cleanse leaves no debuff, while an uncleansable debuff remains and blocks it', () => {
+    const cleanseable = setup({}, {
+      statusBatches: [debuff('cleanseable', 1, 1, true)],
+      statusAcquisitionOrders: [1],
+    })
+    const cleanseableStarted = startBattleAction(cleanseable, {
+      actionId: 'action:cleanseable-rising' as ActionId,
+      actorId: WANG_DAHAI_UNIT_ID,
+      endsTurn: false,
+    })
+    expect(cleanseableStarted.ok).toBe(true)
+    if (!cleanseableStarted.ok) return
+    const cleansed = applyWangDahaiRisingMomentum(cleanseableStarted.state)
+    expect(cleansed.ok).toBe(true)
+    if (!cleansed.ok) return
+    const cleansedUnit = cleansed.state.units.find((unit) => (
+      unit.id === WANG_DAHAI_UNIT_ID
+    ))
+    expect(cleansed.state.statusBatches).toEqual([])
+    expect(cleansedUnit?.temporaryAttributeModifiers).toHaveLength(1)
+    if (cleansedUnit !== undefined) expect(getEffectiveAttack(cleansedUnit)).toBe(23)
+    const resourceIndex = cleansed.events.findIndex((event) => (
+      event.type === 'RESOURCE_GAINED' && event.reason === 'wangDahaiRisingMomentum'
+    ))
+    const cleanseIndex = cleansed.events.findIndex((event) => (
+      event.type === 'STATUS_CLEANSED'
+    ))
+    const attackGainIndex = cleansed.events.findIndex((event) => (
+      event.type === 'TEMPORARY_ATTRIBUTE_CHANGED' && event.attribute === 'attack'
+    ))
+    expect(resourceIndex).toBeLessThan(cleanseIndex)
+    expect(cleanseIndex).toBeLessThan(attackGainIndex)
+
+    const uncleansableBatch = debuff('uncleanseable', 1)
+    const uncleansable = setup({}, {
+      statusBatches: [uncleansableBatch],
+      statusAcquisitionOrders: [1],
+    })
+    const uncleansableStarted = startBattleAction(uncleansable, {
+      actionId: 'action:uncleanseable-rising' as ActionId,
+      actorId: WANG_DAHAI_UNIT_ID,
+      endsTurn: false,
+    })
+    expect(uncleansableStarted.ok).toBe(true)
+    if (!uncleansableStarted.ok) return
+    const blocked = applyWangDahaiRisingMomentum(uncleansableStarted.state)
+    expect(blocked.ok).toBe(true)
+    if (!blocked.ok) return
+    expect(blocked.state.statusBatches).toEqual([uncleansableBatch])
+    expect(blocked.events.some((event) => event.type === 'STATUS_CLEANSED')).toBe(false)
+    expect(blocked.state.units.find((unit) => unit.id === WANG_DAHAI_UNIT_ID)
+      ?.temporaryAttributeModifiers).toEqual([])
   })
 
   it('stacks attack gain on consecutive actions and clears it at turn end', () => {
@@ -493,15 +548,56 @@ describe('Wang Dahai first skill branches', () => {
     expect(result.state.personalTurn?.countedActionCount).toBe(1)
     expect(result.events.find((event) => event.type === 'ACTION_STARTED'))
       .toMatchObject({ endsTurn: false })
-    expect(result.events.findIndex((event) => event.type === 'ACTION_COMPLETED'))
-      .toBeLessThan(result.events.findIndex((event) => (
+    const stackingGainIndex = result.events.findIndex((event) => (
         event.type === 'RESOURCE_GAINED'
         && event.reason === 'wangDahaiStackingWave'
-      )))
+    ))
+    const lockIndex = result.events.findIndex((event) => (
+      event.type === 'SPECIAL_COUNTER_CHANGED'
+      && event.counterId === WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID
+      && event.operation === 'increase'
+    ))
+    const actionCompletedIndex = result.events.findIndex((event) => (
+      event.type === 'ACTION_COMPLETED'
+    ))
+    expect(stackingGainIndex).toBeLessThan(lockIndex)
+    expect(lockIndex).toBeLessThan(actionCompletedIndex)
     expect(wangUnit && readSpecialCounter(
       wangUnit,
       WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
     )).toBe(1)
+  })
+
+  it('commits Stacking Wave momentum and lock before one automatic Myriad Rivers reads current momentum', () => {
+    const result = useWangDahaiFirstSkill(
+      setupMyriadRivers({
+        momentum: 8,
+        energy: 1,
+        specialCounters: [{ counterId: WANG_DAHAI_TIDE_COUNTER_ID, value: 1 }],
+      }),
+      firstSkillRequest('stacking-before-myriad', WANG_DAHAI_STACKING_WAVE_BRANCH_ID),
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    const stackingGainIndex = result.events.findIndex((event) => (
+      event.type === 'RESOURCE_GAINED' && event.reason === 'wangDahaiStackingWave'
+    ))
+    const myriadIndex = result.events.findIndex((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+      && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+    ))
+    expect(stackingGainIndex).toBeLessThan(myriadIndex)
+    expect(result.events.filter((event) => (
+      event.type === 'SKILL_RESOLUTION_STARTED'
+      && event.skillId === WANG_DAHAI_MYRIAD_RIVERS_SKILL_ID
+    ))).toHaveLength(1)
+    expect(result.events).toContainEqual(expect.objectContaining({
+      type: 'RESOURCE_REDUCTION_PREVENTED',
+      reason: 'wangDahaiMyriadRivers',
+    }))
+    expect(result.state.units.find((unit) => unit.id === WANG_DAHAI_UNIT_ID))
+      .toMatchObject({ momentum: 11 })
   })
 
   it('uses the momentum snapshot from before Rising Momentum for New Tide', () => {
@@ -517,7 +613,7 @@ describe('Wang Dahai first skill branches', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.state.units.find((unit) => unit.id === unitId('other')))
-      .toMatchObject({ currentHealth: 175, momentum: 4 })
+      .toMatchObject({ currentHealth: 175, momentum: 3 })
     const damageIndex = result.events.findIndex((event) => (
       event.type === 'DAMAGE_CALCULATED'
     ))
@@ -540,6 +636,20 @@ describe('Wang Dahai first skill branches', () => {
     if (highResult.ok) {
       expect(highResult.state.units.find((unit) => unit.id === unitId('other'))?.momentum)
         .toBe(5)
+    }
+
+    const zeroSnapshot = setupFirstSkill(
+      { momentum: 0 },
+      { momentum: 5, currentHealth: 200, maximumHealth: 200 },
+    )
+    const zeroResult = useWangDahaiFirstSkill(
+      zeroSnapshot,
+      firstSkillRequest('new-tide-zero-snapshot', WANG_DAHAI_NEW_TIDE_BRANCH_ID),
+    )
+    expect(zeroResult.ok).toBe(true)
+    if (zeroResult.ok) {
+      expect(zeroResult.state.units.find((unit) => unit.id === unitId('other')))
+        .toMatchObject({ momentum: 3 })
     }
   })
 
@@ -702,7 +812,7 @@ describe('Wang Dahai first skill rollback', () => {
     expect(result.state.units).toBe(awaiting.units)
   })
 
-  it('rolls payment, damage, RNG, and action back after a post-damage failure', () => {
+  it('does not attempt an invalid zero-momentum reduction after a locked low-momentum New Tide', () => {
     const rng = createFixedSequenceRandomState([0.1])
     const awaiting = setupFirstSkill(
       { criticalRate: 0.5, momentum: 1 },
@@ -711,19 +821,17 @@ describe('Wang Dahai first skill rollback', () => {
     )
     const result = useWangDahaiFirstSkill(
       awaiting,
-      firstSkillRequest('rng-then-failure', WANG_DAHAI_NEW_TIDE_BRANCH_ID),
+      firstSkillRequest('rng-then-zero-target', WANG_DAHAI_NEW_TIDE_BRANCH_ID),
     )
 
-    expect(result).toMatchObject({
-      ok: false,
-      state: awaiting,
-      reason: 'INSUFFICIENT_RESOURCE',
-    })
-    expect(result.state.rngState).toBe(rng)
-    expect(result.state.rngState.cursor).toBe(0)
-    expect(result.state.units).toBe(awaiting.units)
-    expect(result.state.events).toBe(awaiting.events)
-    expect(result.state.activeAction).toBeNull()
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.state.rngState.cursor).toBe(1)
+    expect(result.state.units.find((unit) => unit.id === unitId('other')))
+      .toMatchObject({ momentum: 0, currentHealth: 162.5 })
+    expect(result.events.some((event) => (
+      event.type === 'RESOURCE_SPENT' && event.reason === 'wangDahaiNewTide'
+    ))).toBe(false)
   })
 
   it('rolls the stacking count, lock, resources, and action back when completion fails', () => {
@@ -759,7 +867,7 @@ describe('Wang Dahai first skill rollback', () => {
 })
 
 describe('Wang Dahai first skill lethal and pressure behavior', () => {
-  it('keeps lethal state and triggers momentum pressure once per execution target', () => {
+  it('keeps lethal state and cancels attached momentum pressure', () => {
     const request = firstSkillRequest(
       'lethal-pressure',
       WANG_DAHAI_NEW_TIDE_BRANCH_ID,
@@ -780,7 +888,7 @@ describe('Wang Dahai first skill lethal and pressure behavior', () => {
       event.type === 'MOMENTUM_PRESSURE_TRIGGERED'
       && event.skillExecutionId === request.skillExecutionId
       && event.targetUnitId === request.targetUnitId
-    ))).toHaveLength(1)
+    ))).toHaveLength(0)
     expect(result.events.filter((event) => (
       event.type === 'UNIT_DIED' && event.unitId === request.targetUnitId
     ))).toHaveLength(1)

@@ -61,6 +61,7 @@ export function validateCombatUnit(
     unit.extraDamageIncrease,
     unit.extraDamageReduction,
     ...unit.temporaryAttributeModifiers.map((modifier) => modifier.value),
+    ...(unit.normalDamageIncreaseSources ?? []).map((source) => source.modifier),
     ...unit.normalDamageReductionSources.map((source) => source.reduction),
   ])) {
     return 'INVALID_UNIT_NUMERIC_STATE'
