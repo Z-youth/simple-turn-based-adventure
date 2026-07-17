@@ -63,6 +63,7 @@ export function validateCombatUnit(
     unit.normalDamageIncrease,
     unit.extraDamageIncrease,
     unit.extraDamageReduction,
+    unit.flow ?? 0,
     ...unit.temporaryAttributeModifiers.map((modifier) => modifier.value),
     ...(unit.normalDamageIncreaseSources ?? []).map((source) => source.modifier),
     ...unit.normalDamageReductionSources.map((source) => source.reduction),
@@ -82,6 +83,7 @@ export function validateCombatUnit(
     unit.momentumPressure,
     unit.intent,
     unit.magic,
+    unit.flow ?? 0,
   ].every(Number.isSafeInteger)) {
     return 'INVALID_UNIT_RESOURCE_STATE'
   }
@@ -90,6 +92,7 @@ export function validateCombatUnit(
     || unit.momentumPressure < 0
     || unit.intent < 0
     || unit.magic < 0
+    || (unit.flow ?? 0) < 0
   ) return 'INVALID_UNIT_RESOURCE_STATE'
   return null
 }

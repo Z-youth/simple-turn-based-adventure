@@ -1,5 +1,6 @@
 import type { Camp, Position, UnitSystem } from './enums'
-import type { SkillId, StatusId, UnitId } from './identifiers'
+import type { SkillId, SpecialCounterId, StatusId, UnitId } from './identifiers'
+import type { ResourceType } from './resources'
 import type {
   ResourceReductionProtection,
   SpecialCounter,
@@ -23,6 +24,12 @@ export interface MomentumReadRule {
   readonly attackLayersPerMomentum: number
   readonly effectLayersPerMomentum: number
   readonly pressureLayersPerMomentum: number
+}
+
+export interface ResourceCounterContribution {
+  readonly resourceType: ResourceType
+  readonly counterId: SpecialCounterId
+  readonly reductionPriority: number
 }
 
 export interface UnitState {
@@ -49,6 +56,8 @@ export interface UnitState {
   readonly extraDamageReduction: number
   readonly energy: number
   readonly momentum: number
+  readonly flow?: number
+  readonly resourceCounterContributions?: readonly ResourceCounterContribution[]
   readonly momentumReadRules?: readonly MomentumReadRule[]
   readonly intent: number
   readonly magic: number

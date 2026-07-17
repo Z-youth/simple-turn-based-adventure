@@ -12,6 +12,7 @@ import { TRAINING_DUMMY_BATTLE_EXTENSIONS } from './bosses/trainingDummy'
 import { LI_MUTOU_BATTLE_EXTENSIONS } from './characters/liMutou'
 import { WANG_DAHAI_BATTLE_EXTENSIONS } from './characters/wangDahai'
 import { YAN_YAN_BATTLE_EXTENSIONS } from './characters/yanYan'
+import { LIUNIAN_BATTLE_EXTENSIONS } from './characters/liunian'
 
 function runTurnStartPreSystemExtensions(
   extensions: readonly BattleEngineExtensions[],
@@ -234,6 +235,7 @@ export function combineBattleEngineExtensions(
 }
 
 export const GAME_CONTENT_BATTLE_EXTENSIONS = combineBattleEngineExtensions(
+  LIUNIAN_BATTLE_EXTENSIONS,
   WANG_DAHAI_BATTLE_EXTENSIONS,
   LI_MUTOU_BATTLE_EXTENSIONS,
   YAN_YAN_BATTLE_EXTENSIONS,

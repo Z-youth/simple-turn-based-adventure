@@ -975,6 +975,10 @@ export function startBattleAction(
   state: BattleState,
   input: StartActionInput,
 ): BattleTransitionResult {
+  if (state.pendingForcedChoice !== null
+    && state.pendingForcedChoice !== undefined) {
+    return failure(state, 'FORCED_CHOICE_PENDING')
+  }
   if (isBattleStopped(state)) return failure(state, 'BATTLE_NOT_ACTIVE')
   const invalidUnits = validateBattleStateUnits(state)
   if (invalidUnits !== null) return failure(state, invalidUnits)

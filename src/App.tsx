@@ -39,6 +39,7 @@ import { TrainingExitConfirmation } from './game/core/commands'
 import type { BattleState } from './game/core/contexts'
 import type { BattleEvent } from './game/core/events'
 import type { Position } from './game/core/enums'
+import type { UnitId } from './game/core/identifiers'
 import type { UnitState } from './game/core/units'
 
 type PreBattlePage =
@@ -217,6 +218,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [showBattleExitConfirmation, setShowBattleExitConfirmation] = useState(false)
   const [actionPlaybackLocked, setActionPlaybackLocked] = useState(false)
+  const [pendingTargetActionId, setPendingTargetActionId] = useState<string | null>(null)
   const [damageHitVersions, setDamageHitVersions] = useState<Readonly<Record<string, number>>>({})
   const [resultOutcome, setResultOutcome] = useState<'victory' | 'defeat' | null>(null)
   const actionSerial = useRef(0)
@@ -293,6 +295,7 @@ function App() {
     setError(null)
     setToast(null)
     setResultOutcome(null)
+    setPendingTargetActionId(null)
     manualPausedBattleState.current = null
     stopActionPlayback()
     setDisplayedBattleEvents([])
@@ -326,6 +329,7 @@ function App() {
     if (bossKey === null) return
     actionSerial.current = 0
     setResultOutcome(null)
+    setPendingTargetActionId(null)
     manualPausedBattleState.current = null
     stopActionPlayback()
     setDamageHitVersions({})
@@ -351,13 +355,23 @@ function App() {
     }
   }
 
-  const performAction = (actionId: string) => {
+  const performAction = (actionId: string, targetUnitId?: UnitId) => {
     if (battleState === null || actionPlaybackLocked) return
+    const action = getUiBattleActions(battleState).find((candidate) => (
+      candidate.id === actionId
+    ))
+    if (targetUnitId === undefined && (action?.targetOptions.length ?? 0) > 0) {
+      setPendingTargetActionId(actionId)
+      setError(null)
+      return
+    }
+    setPendingTargetActionId(null)
     actionSerial.current += 1
     const result = executeUiBattleAction(
       battleState,
       actionId,
       actionSerial.current,
+      targetUnitId,
     )
     setBattleState(result.state)
     setError(result.ok ? null : result.reason ?? '行动失败')
@@ -369,6 +383,7 @@ function App() {
 
   const endTurn = () => {
     if (battleState === null || actionPlaybackLocked) return
+    setPendingTargetActionId(null)
     const result = endUiPlayerTurn(battleState)
     setBattleState(result.state)
     setError(result.ok ? null : result.reason ?? '结束回合失败')
@@ -429,6 +444,7 @@ function App() {
     setDisplayedBattleEvents([])
     setError(result.ok ? null : result.reason ?? '重置战斗失败')
     setResultOutcome(null)
+    setPendingTargetActionId(null)
     manualPausedBattleState.current = null
     setDamageHitVersions({})
     if (result.ok) {
@@ -515,6 +531,9 @@ function App() {
   const recentEvents = visibleBattleEvents.slice(-18).reverse()
   const allBattleEvents = visibleBattleEvents.slice().reverse()
   const availableActions = getUiBattleActions(battleState)
+  const pendingTargetAction = availableActions.find((action) => (
+    action.id === pendingTargetActionId
+  )) ?? null
   const isReadOnlyBattlefield = page === 'pausedBattlefield'
   const pauseReason = battleState === null ? null : getUiTrainingPauseReason(battleState)
   const canResumeBattle = pauseReason === 'MANUAL_PAUSE' && manualPausedBattleState.current !== null
@@ -902,6 +921,32 @@ function App() {
                         onClick={endTurn}
                         tone="secondary"
                       />
+                      {pendingTargetAction !== null && (
+                        <div className="friendly-target-selector" role="group" aria-label="选择友方目标">
+                          <strong>为{pendingTargetAction.label}选择目标</strong>
+                          <div className="friendly-target-options">
+                            {pendingTargetAction.targetOptions.map((target) => (
+                              <button
+                                key={target.unitId}
+                                type="button"
+                                onClick={() => performAction(
+                                  pendingTargetAction.id,
+                                  target.unitId,
+                                )}
+                              >
+                                {target.label}
+                              </button>
+                            ))}
+                          </div>
+                          <button
+                            className="friendly-target-cancel"
+                            type="button"
+                            onClick={() => setPendingTargetActionId(null)}
+                          >
+                            取消
+                          </button>
+                        </div>
+                      )}
                     </div>
                   )}
               {error !== null && (

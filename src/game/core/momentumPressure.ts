@@ -108,7 +108,7 @@ export function recalculateMomentumPressure(
     getMomentumAttackLayers(unit),
   )
   const pressureLayers = getMomentumPressureLayers(unit)
-  if (!Number.isSafeInteger(momentumAttackBonus)
+  if (!Number.isFinite(momentumAttackBonus)
     || !Number.isSafeInteger(pressureLayers)
     || pressureLayers < 0) {
     return failure(state, 'INVALID_MOMENTUM_PRESSURE_VALUE')

@@ -14,6 +14,7 @@ export const ResourceType = Object.freeze({
   MomentumPressure: 'momentumPressure',
   Intent: 'intent',
   Magic: 'magic',
+  Flow: 'flow',
 } as const)
 
 export type ResourceType = (typeof ResourceType)[keyof typeof ResourceType]
@@ -24,6 +25,7 @@ const CANONICAL_RESOURCE_TYPE_ORDER: readonly ResourceType[] = Object.freeze([
   ResourceType.MomentumPressure,
   ResourceType.Intent,
   ResourceType.Magic,
+  ResourceType.Flow,
 ])
 
 export const RESOURCE_TYPE_ORDER: readonly ResourceType[] = Object.freeze([
@@ -169,6 +171,14 @@ const DEFAULT_RESOURCE_CONFIGURATION = freezeResourceConfiguration([
     allowSpend: true,
     systemDerived: false,
   },
+  {
+    resourceType: ResourceType.Flow,
+    minimum: 0,
+    maximum: null,
+    allowGain: true,
+    allowSpend: true,
+    systemDerived: false,
+  },
 ])
 
 export function resolveResourceFormulaValue(value: number): ResourceFormulaResult {
@@ -298,17 +308,27 @@ export function readUnitResource(
   unit: UnitState,
   resourceType: ResourceType,
 ): number {
+  const contributed = (unit.resourceCounterContributions ?? []).reduce(
+    (total, contribution) => contribution.resourceType === resourceType
+      ? total + (unit.specialCounters.find((counter) => (
+          counter.counterId === contribution.counterId
+        ))?.value ?? 0)
+      : total,
+    0,
+  )
   switch (resourceType) {
     case ResourceType.Energy:
-      return unit.energy
+      return unit.energy + contributed
     case ResourceType.Momentum:
-      return unit.momentum
+      return unit.momentum + contributed
     case ResourceType.MomentumPressure:
       return unit.momentumPressure
     case ResourceType.Intent:
       return unit.intent
     case ResourceType.Magic:
       return unit.magic
+    case ResourceType.Flow:
+      return (unit.flow ?? 0) + contributed
   }
 }
 
@@ -328,7 +348,72 @@ function replaceUnitResource(
       return { ...unit, intent: value }
     case ResourceType.Magic:
       return { ...unit, magic: value }
+    case ResourceType.Flow:
+      return { ...unit, flow: value }
   }
+}
+
+function replaceUnitResourceWithPriorities(
+  unit: UnitState,
+  resourceType: ResourceType,
+  before: number,
+  after: number,
+): UnitState {
+  if (after >= before) {
+    const baseValue = resourceType === ResourceType.Momentum
+      ? unit.momentum
+      : resourceType === ResourceType.Flow
+        ? unit.flow ?? 0
+        : before
+    return replaceUnitResource(unit, resourceType, baseValue + after - before)
+  }
+  let remainingReduction = before - after
+  let counters = unit.specialCounters
+  const contributions = (unit.resourceCounterContributions ?? [])
+    .filter((contribution) => contribution.resourceType === resourceType)
+    .slice()
+    .sort((left, right) => left.reductionPriority - right.reductionPriority)
+  for (const contribution of contributions) {
+    if (remainingReduction === 0) break
+    const counter = counters.find((candidate) => (
+      candidate.counterId === contribution.counterId
+    ))
+    if (counter === undefined || counter.value === 0) continue
+    const reduction = Math.min(counter.value, remainingReduction)
+    counters = counters.map((candidate) => candidate.counterId === counter.counterId
+      ? { ...candidate, value: candidate.value - reduction }
+      : candidate)
+    remainingReduction -= reduction
+  }
+  const baseBefore = resourceType === ResourceType.Momentum
+    ? unit.momentum
+    : resourceType === ResourceType.Flow
+      ? unit.flow ?? 0
+      : before
+  return replaceUnitResource(
+    { ...unit, specialCounters: counters },
+    resourceType,
+    baseBefore - remainingReduction,
+  )
+}
+
+function setUnitResourceValue(
+  unit: UnitState,
+  resourceType: ResourceType,
+  value: number,
+): UnitState {
+  const counterIds = new Set((unit.resourceCounterContributions ?? [])
+    .filter((contribution) => contribution.resourceType === resourceType)
+    .map((contribution) => contribution.counterId))
+  const cleared = counterIds.size === 0
+    ? unit
+    : {
+        ...unit,
+        specialCounters: unit.specialCounters.map((counter) => (
+          counterIds.has(counter.counterId) ? { ...counter, value: 0 } : counter
+        )),
+      }
+  return replaceUnitResource(cleared, resourceType, value)
 }
 
 function failure(
@@ -448,7 +533,12 @@ function changeResource(
   if (actualAmount === 0) {
     return { ok: true, state, events: [] }
   }
-  const replacement = replaceUnitResource(unit, request.resourceType, after)
+  const replacement = replaceUnitResourceWithPriorities(
+    unit,
+    request.resourceType,
+    before,
+    after,
+  )
   const event: BattleEvent = {
     type: kind === 'gain'
       ? 'RESOURCE_GAINED'
@@ -536,7 +626,11 @@ export function setResource(
     return failure(state, 'RESOURCE_VALUE_OUT_OF_RANGE')
   }
   if (before === request.value) return { ok: true, state, events: [] }
-  const replacement = replaceUnitResource(unit, request.resourceType, request.value)
+  const replacement = setUnitResourceValue(
+    unit,
+    request.resourceType,
+    request.value,
+  )
   const event: BattleEvent = {
     type: 'RESOURCE_SET',
     unitId: unit.id,

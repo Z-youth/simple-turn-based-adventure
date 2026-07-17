@@ -25,6 +25,7 @@ import type { UnitState } from './units'
 import type { RandomState } from './rng'
 import type { ResourceConfiguration } from './resources'
 import type { ResourceCost } from './resources'
+import type { DelayedEffect } from './effectScheduler'
 
 export interface TurnQueueEntry {
   readonly unitId: UnitId
@@ -190,5 +191,11 @@ export interface BattleState {
   readonly log: readonly BattleLogEvent[]
   readonly events: readonly BattleEvent[]
   readonly outcome?: 'playerVictory' | 'playerDefeat' | null
+  readonly pendingEffects?: readonly DelayedEffect[]
+  readonly pendingForcedChoice?: {
+    readonly choiceId: string
+    readonly unitId: UnitId
+    readonly kind: string
+  } | null
   readonly trainingSession?: TrainingSessionState | null
 }

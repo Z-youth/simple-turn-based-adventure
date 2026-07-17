@@ -542,6 +542,37 @@ h2 {
   margin-top: 20px;
 }
 
+.friendly-target-selector {
+  grid-column: 1 / -1;
+  padding: 14px;
+  border: 1px solid #b7d8e2;
+  border-radius: 10px;
+  background: #f5fbfc;
+}
+
+.friendly-target-options {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.friendly-target-options button,
+.friendly-target-cancel {
+  padding: 8px 12px;
+  border: 1px solid #b7d8e2;
+  border-radius: 8px;
+  color: var(--ocean-dark);
+  background: white;
+  cursor: pointer;
+}
+
+.friendly-target-cancel {
+  margin-top: 10px;
+  color: #475467;
+  border-color: #d0d5dd;
+}
+
 .action-option {
   position: relative;
   min-width: 0;

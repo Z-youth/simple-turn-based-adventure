@@ -2,6 +2,7 @@ import { Position } from './enums'
 import type { UnitState } from './units'
 import type { MomentumReadRule } from './units'
 import { clampMinimum, clampProbabilityForRoll } from './rounding'
+import { readUnitResource, ResourceType } from './resources'
 import {
   TemporaryAttribute,
   type TemporaryAttribute as TemporaryAttributeValue,
@@ -41,7 +42,7 @@ function validMomentumReadRules(
       rule.attackLayersPerMomentum,
       rule.effectLayersPerMomentum,
       rule.pressureLayersPerMomentum,
-    ].every((value) => Number.isSafeInteger(value) && value > 0)) {
+    ].every((value) => Number.isFinite(value) && value > 0)) {
       return false
     }
     if (rule.maximumActualMomentum !== null) {
@@ -72,7 +73,10 @@ function getMomentumReadValue(
       : kind === 'effect'
         ? rule.effectLayersPerMomentum
         : rule.pressureLayersPerMomentum
-  return unit.momentum * multiplier
+  const momentum = kind === 'attack'
+    ? unit.momentum
+    : readUnitResource(unit, ResourceType.Momentum)
+  return momentum * multiplier
 }
 
 export function getMomentumAttackLayers(unit: UnitState): number {

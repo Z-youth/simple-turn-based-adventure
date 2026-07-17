@@ -50,6 +50,28 @@ import {
   YAN_YAN_UNIT_ID,
 } from '../content/characters/yanYan'
 import {
+  createLiunian,
+  getFlowTransferStacks,
+  hasLiunianUsedFlowChangeThisTurn,
+  getLiunianKanyuTargets,
+  getLiunianTotalMomentum,
+  isLiunianDomainActive,
+  LIUNIAN_DOMAIN_COUNTER_ID,
+  LIUNIAN_DOMAIN_SKILL_ID,
+  LIUNIAN_FIRST_SKILL_ID,
+  LIUNIAN_FLOW_CHANGE_SKILL_ID,
+  LIUNIAN_NORTH_WIND_SKILL_ID,
+  LIUNIAN_SOUTH_WATER_SKILL_ID,
+  LIUNIAN_UNIT_ID,
+  resolveLiunianFlowExchange,
+  resolveLiunianDingxue,
+  resolveLiunianDomain,
+  resolveLiunianFlowChange,
+  resolveLiunianKanyu,
+  resolveLiunianNorthWind,
+  resolveLiunianSouthWater,
+} from '../content/characters/liunian'
+import {
   pauseTrainingBattle,
   requestPlayerEndTurn,
   requestTrainingExit,
@@ -77,7 +99,11 @@ import type {
   UnitId,
 } from '../core/identifiers'
 import { createSeededRandomState } from '../core/rng'
-import { createDefaultResourceConfiguration } from '../core/resources'
+import {
+  createDefaultResourceConfiguration,
+  readUnitResource,
+  ResourceType,
+} from '../core/resources'
 import { readSpecialCounter } from '../core/specialCounters'
 import { createPositionProtectionSnapshot } from '../core/positionProtection'
 import {
@@ -93,7 +119,7 @@ import {
 import type { UnitState } from '../core/units'
 
 export type WangDahaiAction = 'newTide' | 'stackingWave' | 'moonlitTide'
-export type UiCharacterKey = 'wangDahai' | 'liMutou' | 'yanYan'
+export type UiCharacterKey = 'wangDahai' | 'liMutou' | 'yanYan' | 'liunian'
 export type UiBossKey = 'trainingDummy'
 
 interface UiCharacterDefinition {
@@ -128,6 +154,12 @@ export const UI_CHARACTER_DEFINITIONS: readonly UiCharacterDefinition[] = [
     unitId: YAN_YAN_UNIT_ID,
     name: '严岩',
     create: createYanYan,
+  },
+  {
+    key: 'liunian',
+    unitId: LIUNIAN_UNIT_ID,
+    name: '流年',
+    create: createLiunian,
   },
 ]
 
@@ -168,6 +200,12 @@ export interface UiBattleAction {
   readonly description: string
   readonly effectDetails: readonly string[]
   readonly unavailableReason: string | null
+  readonly targetOptions: readonly UiBattleTargetOption[]
+}
+
+export interface UiBattleTargetOption {
+  readonly unitId: UnitId
+  readonly label: string
 }
 
 export interface UiTrainingExitResult {
@@ -193,7 +231,12 @@ interface UiBattleActionDefinition {
   readonly effectDetails: readonly string[]
   readonly skillIds: readonly string[]
   readonly unavailableReason: (state: BattleState, actor: UnitState) => string | null
-  readonly execute: (state: BattleState, serial: number) => UiBattleResult
+  readonly getTargetOptions?: (state: BattleState) => readonly UiBattleTargetOption[]
+  readonly execute: (
+    state: BattleState,
+    serial: number,
+    targetUnitId?: UnitId,
+  ) => UiBattleResult
 }
 
 function createInitialState(
@@ -492,6 +535,80 @@ function executeYanYanBaiyue(state: BattleState, serial: number): UiBattleResult
   }, GAME_CONTENT_BATTLE_EXTENSIONS))
 }
 
+function getOtherLivingPlayerTargets(state: BattleState): readonly UnitState[] {
+  return state.units.filter((unit) => (
+    unit.camp === 'player'
+    && unit.id !== LIUNIAN_UNIT_ID
+    && isUnitAlive(unit)
+  ))
+}
+
+function getOtherLivingPlayerTarget(state: BattleState): UnitId | null {
+  return getOtherLivingPlayerTargets(state)[0]?.id ?? null
+}
+
+function getOtherLivingPlayerTargetOptions(
+  state: BattleState,
+): readonly UiBattleTargetOption[] {
+  return getOtherLivingPlayerTargets(state).map((unit) => ({
+    unitId: unit.id,
+    label: unit.name,
+  }))
+}
+
+function executeLiunianTargetSkill(
+  state: BattleState,
+  serial: number,
+  action: 'kanyu' | 'dingxue' | 'northWind',
+): UiBattleResult {
+  const targetUnitId = action === 'kanyu'
+    ? getLiunianKanyuTargets(state)[0]?.id ?? null
+    : getLivingEnemyTarget(state, LIUNIAN_UNIT_ID)
+  if (targetUnitId === null) return failure(state, '没有合法目标')
+  const ids = createUiActionIds(LIUNIAN_UNIT_ID, serial, action)
+  const request = { targetUnitId, ...ids }
+  const result = action === 'kanyu'
+    ? resolveLiunianKanyu(state, request, GAME_CONTENT_BATTLE_EXTENSIONS)
+    : action === 'dingxue'
+      ? resolveLiunianDingxue(state, request, GAME_CONTENT_BATTLE_EXTENSIONS)
+      : resolveLiunianNorthWind(state, request, GAME_CONTENT_BATTLE_EXTENSIONS)
+  return actionResult(result)
+}
+
+function executeLiunianDomain(state: BattleState, serial: number): UiBattleResult {
+  const ids = createUiActionIds(LIUNIAN_UNIT_ID, serial, 'domain')
+  return actionResult(resolveLiunianDomain(state, ids, GAME_CONTENT_BATTLE_EXTENSIONS))
+}
+
+function executeLiunianAllySkill(
+  state: BattleState,
+  serial: number,
+  action: 'flowChange' | 'southWater',
+  selectedTargetUnitId?: UnitId,
+): UiBattleResult {
+  if (selectedTargetUnitId === undefined) {
+    return failure(state, action === 'flowChange'
+      ? '请选择生生流变的友方目标'
+      : '请选择南阳水来的友方目标')
+  }
+  const targetUnitId = selectedTargetUnitId
+  if (!getOtherLivingPlayerTargets(state).some((unit) => unit.id === targetUnitId)) {
+    return failure(state, '所选目标不是其他存活队友')
+  }
+  const ids = createUiActionIds(LIUNIAN_UNIT_ID, serial, action)
+  return actionResult(action === 'flowChange'
+    ? resolveLiunianFlowChange(
+        state,
+        { targetUnitId, ...ids },
+        GAME_CONTENT_BATTLE_EXTENSIONS,
+      )
+    : resolveLiunianSouthWater(
+        state,
+        { targetUnitId, ...ids },
+        GAME_CONTENT_BATTLE_EXTENSIONS,
+      ))
+}
+
 const UI_BATTLE_ACTION_DEFINITIONS: readonly UiBattleActionDefinition[] = [
   {
     id: 'wangDahai.newTide', actorId: WANG_DAHAI_UNIT_ID,
@@ -661,16 +778,164 @@ const UI_BATTLE_ACTION_DEFINITIONS: readonly UiBattleActionDefinition[] = [
     },
     execute: executeYanYanBaiyue,
   },
+  {
+    id: 'liunian.kanyu', actorId: LIUNIAN_UNIT_ID,
+    label: '堪舆', detail: '单体0.4倍伤害 · 势减半1回合 · 结束回合',
+    resourceCost: '无消耗', targetRule: '势高于其他队友且不高于流年的存活敌方',
+    description: '攻击合法敌方并添加或刷新势减半。',
+    effectDetails: [
+      '伤害：当前攻击×0.4；命中1段',
+      '状态：势减半1个目标自身回合，可净化、不可叠加、重复刷新',
+      '条件：目标实际势高于除流年外所有队友，且不高于流年实际总势',
+    ],
+    skillIds: [LIUNIAN_FIRST_SKILL_ID],
+    unavailableReason: (state, actor) => isLiunianDomainActive(actor)
+      ? '领域开启时已替换为北山风起/南阳水来'
+      : getLiunianKanyuTargets(state).length === 0 ? '没有符合堪舆条件的目标' : null,
+    execute: (state, serial) => executeLiunianTargetSkill(state, serial, 'kanyu'),
+  },
+  {
+    id: 'liunian.dingxue', actorId: LIUNIAN_UNIT_ID,
+    label: '定穴', detail: '获得1能量、2势、1流 · 单体0.6倍伤害 · 结束回合',
+    resourceCost: '无消耗', targetRule: '选择1名存活敌方',
+    description: '依次获得资源后攻击敌方。',
+    effectDetails: [
+      '资源顺序：获得1能量 → 2势 → 1流',
+      '伤害：资源结算后按当前攻击×0.6；命中1段',
+    ],
+    skillIds: [LIUNIAN_FIRST_SKILL_ID],
+    unavailableReason: (state, actor) => isLiunianDomainActive(actor)
+      ? '领域开启时已替换为北山风起/南阳水来'
+      : targetUnavailableReason(state, LIUNIAN_UNIT_ID),
+    execute: (state, serial) => executeLiunianTargetSkill(state, serial, 'dingxue'),
+  },
+  {
+    id: 'liunian.domain', actorId: LIUNIAN_UNIT_ID,
+    label: '三生流转', detail: '1能量 · 开启领域 · 不结束回合',
+    resourceCost: '1能量', targetRule: '自身',
+    description: '开启领域并替换一技能。',
+    effectDetails: [
+      '资源：消耗1能量',
+      '状态：开启三生流转；已开启时禁用',
+      '回合结束：按流年自身流转层数扣流，流归0时关闭',
+    ],
+    skillIds: [LIUNIAN_DOMAIN_SKILL_ID],
+    unavailableReason: (_state, actor) => isLiunianDomainActive(actor)
+      ? '三生流转已开启'
+      : actor.energy < 1 ? '能量不足（需要1）' : null,
+    execute: executeLiunianDomain,
+  },
+  {
+    id: 'liunian.flowChange', actorId: LIUNIAN_UNIT_ID,
+    label: '生生流变', detail: '1能量 · 双方各得1流转 · 不结束回合',
+    resourceCost: '1能量', targetRule: '选择1名其他存活队友',
+    description: '叠加流转；切换目标时清空旧队友流转。',
+    effectDetails: [
+      '资源：消耗1能量',
+      '状态：目标与流年各得1层流转，可连续叠加',
+      '限制：每个流年个人回合最多释放1次，额外行动不重置',
+      '交换：持有者回合开始、决定行动前强制二选一交换势',
+    ],
+    skillIds: [LIUNIAN_FLOW_CHANGE_SKILL_ID],
+    unavailableReason: (state, actor) => !isLiunianDomainActive(actor)
+      ? '需要先开启三生流转'
+      : actor.energy < 1
+        ? '能量不足（需要1）'
+        : hasLiunianUsedFlowChangeThisTurn(state)
+          ? '本个人回合已释放过生生流变'
+          : getOtherLivingPlayerTarget(state) === null ? '没有其他存活队友' : null,
+    getTargetOptions: getOtherLivingPlayerTargetOptions,
+    execute: (state, serial, targetUnitId) => executeLiunianAllySkill(
+      state,
+      serial,
+      'flowChange',
+      targetUnitId,
+    ),
+  },
+  {
+    id: 'liunian.northWind', actorId: LIUNIAN_UNIT_ID,
+    label: '北山风起', detail: '获得1能量、3势、3流 · 固定目标概率重复 · 结束回合',
+    resourceCost: '无消耗', targetRule: '固定1名存活敌方',
+    description: '完整释放并最多额外重复2次。',
+    effectDetails: [
+      '每次：获得1能量、3势、3流 → 0.6倍伤害 → 条件势减半 → 加入下一己方回合2势队列',
+      '重复率：20% + 流年流转层数×10%，最高100%',
+      '固定原目标；目标死亡、离场或被替换时取消余下重复且不重选',
+    ],
+    skillIds: [LIUNIAN_NORTH_WIND_SKILL_ID],
+    unavailableReason: (state, actor) => !isLiunianDomainActive(actor)
+      ? '需要先开启三生流转'
+      : targetUnavailableReason(state, LIUNIAN_UNIT_ID),
+    execute: (state, serial) => executeLiunianTargetSkill(state, serial, 'northWind'),
+  },
+  {
+    id: 'liunian.southWater', actorId: LIUNIAN_UNIT_ID,
+    label: '南阳水来', detail: '1能量 · 主动治疗队友并联动流转 · 结束回合',
+    resourceCost: '1能量', targetRule: '选择1名其他存活队友',
+    description: '治疗队友；流转目标额外治疗流年并获得势。',
+    effectDetails: [
+      '治疗：目标恢复流年当前攻击×0.5生命',
+      '流转联动：流年按计算值同疗，不受目标实际恢复量影响；目标获得等于自身流转层数的势',
+      '资源：消耗1能量',
+      '回合：默认结束流年的个人回合',
+    ],
+    skillIds: [LIUNIAN_SOUTH_WATER_SKILL_ID],
+    unavailableReason: (state, actor) => !isLiunianDomainActive(actor)
+      ? '需要先开启三生流转'
+      : actor.energy < 1
+        ? '能量不足（需要1）'
+        : getOtherLivingPlayerTarget(state) === null ? '没有其他存活队友' : null,
+    getTargetOptions: getOtherLivingPlayerTargetOptions,
+    execute: (state, serial, targetUnitId) => executeLiunianAllySkill(
+      state,
+      serial,
+      'southWater',
+      targetUnitId,
+    ),
+  },
 ]
 
 export function getUiBattleActions(
   state: BattleState | null,
 ): readonly UiBattleAction[] {
   if (state === null) return []
+  if (state.pendingForcedChoice?.kind === 'liunianFlowExchange') {
+    return [
+      {
+        id: 'liunian.exchange.otherLoses',
+        label: '由另一人交出势',
+        detail: '另一名流转持有者失去对应层数的势，当前持有者获得实际失去量',
+        resourceCost: '强制选择',
+        targetRule: '另一名流转持有者',
+        description: '借来势优先失去。',
+        effectDetails: ['势不足时失去全部；获得方只获得实际失去量'],
+        unavailableReason: null,
+        targetOptions: [],
+      },
+      {
+        id: 'liunian.exchange.holderLoses',
+        label: '由当前持有者交出势',
+        detail: '当前持有者失去对应层数的势，另一人获得实际失去量',
+        resourceCost: '强制选择',
+        targetRule: '当前流转持有者',
+        description: '借来势优先失去。',
+        effectDetails: ['选择完成前不能执行其他行动'],
+        unavailableReason: null,
+        targetOptions: [],
+      },
+    ]
+  }
   const actor = getReadyPlayerUnit(state)
   if (actor === null) return []
   return UI_BATTLE_ACTION_DEFINITIONS
     .filter((action) => action.actorId === actor.id)
+    .filter((action) => {
+      if (actor.id !== LIUNIAN_UNIT_ID) return true
+      const domain = isLiunianDomainActive(actor)
+      return domain
+        ? action.id !== 'liunian.kanyu' && action.id !== 'liunian.dingxue'
+        : action.id !== 'liunian.northWind' && action.id !== 'liunian.southWater'
+    })
     .map((action) => ({
       id: action.id,
       label: action.label,
@@ -680,6 +945,7 @@ export function getUiBattleActions(
       description: action.description,
       effectDetails: action.effectDetails,
       unavailableReason: action.unavailableReason(state, actor),
+      targetOptions: action.getTargetOptions?.(state) ?? [],
     }))
 }
 
@@ -687,7 +953,17 @@ export function executeUiBattleAction(
   state: BattleState,
   actionId: string,
   serial: number,
+  targetUnitId?: UnitId,
 ): UiBattleResult {
+  if (state.pendingForcedChoice?.kind === 'liunianFlowExchange') {
+    if (actionId === 'liunian.exchange.otherLoses') {
+      return actionResult(resolveLiunianFlowExchange(state, 'otherLoses'))
+    }
+    if (actionId === 'liunian.exchange.holderLoses') {
+      return actionResult(resolveLiunianFlowExchange(state, 'holderLoses'))
+    }
+    return failure(state, '必须先完成流转交换')
+  }
   const actor = getReadyPlayerUnit(state)
   const action = UI_BATTLE_ACTION_DEFINITIONS.find((candidate) => (
     candidate.id === actionId && candidate.actorId === actor?.id
@@ -697,7 +973,7 @@ export function executeUiBattleAction(
   }
   const reason = action.unavailableReason(state, actor)
   if (reason !== null) return failure(state, reason)
-  return action.execute(state, serial)
+  return action.execute(state, serial, targetUnitId)
 }
 
 export function endUiPlayerTurn(state: BattleState): UiBattleResult {
@@ -893,7 +1169,10 @@ function getNormalDamageReduction(state: BattleState, unit: UnitState): number {
   return unitReduction + positionReduction
 }
 
-function getExclusiveUiUnitDetails(unit: UnitState): readonly UiUnitDetailField[] {
+function getExclusiveUiUnitDetails(
+  state: BattleState,
+  unit: UnitState,
+): readonly UiUnitDetailField[] {
   if (unit.id === WANG_DAHAI_UNIT_ID) {
     return [{ label: '海潮', value: readSpecialCounter(unit, WANG_DAHAI_TIDE_COUNTER_ID) }]
   }
@@ -903,6 +1182,18 @@ function getExclusiveUiUnitDetails(unit: UnitState): readonly UiUnitDetailField[
       label: '刀域',
       value: bladeDomain > 0 ? `开启（${bladeDomain} 层）` : '未开启',
     }]
+  }
+  if (unit.id === LIUNIAN_UNIT_ID) {
+    return [
+      { label: '流', value: readUnitResource(unit, ResourceType.Flow) },
+      {
+        label: '三生流转',
+        value: readSpecialCounter(unit, LIUNIAN_DOMAIN_COUNTER_ID) > 0
+          ? '开启'
+          : '未开启',
+      },
+      { label: '流转', value: getFlowTransferStacks(state, unit.id) },
+    ]
   }
   return []
 }
@@ -922,10 +1213,15 @@ export function getUiUnitDetails(
       { label: '暴击率', value: formatPercentage(getEffectiveCriticalRate(unit)) },
       { label: '暴击伤害', value: formatPercentage(getEffectiveCriticalDamage(unit)) },
       { label: '能量', value: unit.energy },
-      { label: '势', value: unit.momentum },
+      {
+        label: '势',
+        value: unit.id === LIUNIAN_UNIT_ID
+          ? getLiunianTotalMomentum(unit)
+          : unit.momentum,
+      },
       { label: '势压', value: unit.momentumPressure },
     ],
-    exclusiveFields: getExclusiveUiUnitDetails(unit),
+    exclusiveFields: getExclusiveUiUnitDetails(state, unit),
     statusDetails: getUiUnitStatusDetails(state, unitId),
   }
 }

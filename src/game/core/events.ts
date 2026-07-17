@@ -91,6 +91,22 @@ export interface BattleFinishedEvent {
   readonly reason: 'ALL_ENEMY_UNITS_DEFEATED' | 'ALL_PLAYER_UNITS_DEFEATED'
 }
 
+export interface ForcedChoiceEvent {
+  readonly type: 'FORCED_CHOICE_REQUIRED' | 'FORCED_CHOICE_RESOLVED'
+  readonly choiceId: string
+  readonly unitId: UnitId
+  readonly sourceUnitId: UnitId
+  readonly effectId: string
+}
+
+export interface PassiveTriggeredEvent {
+  readonly type: 'PASSIVE_TRIGGERED'
+  readonly unitId: UnitId
+  readonly effectId: string
+  readonly sourceUnitId: UnitId
+  readonly targetUnitIds: readonly UnitId[]
+}
+
 export interface TurnStartedEvent extends TurnEventBase {
   readonly type: 'TURN_STARTED'
 }
@@ -405,6 +421,8 @@ export type BattleEvent =
   | BattlefieldUnitEvent
   | UnitReplacedEvent
   | BattleFinishedEvent
+  | ForcedChoiceEvent
+  | PassiveTriggeredEvent
   | TurnStartedEvent
   | TurnStartStageEnteredEvent
   | TurnStartStageCompletedEvent

@@ -51,6 +51,7 @@ describe('resource configuration and selectors', () => {
       'momentumPressure',
       'intent',
       'magic',
+      'flow',
     ])
     for (const resourceType of Object.values(ResourceType)) {
       expect(getResourceMinimum(configuration, resourceType)).toBe(
@@ -76,6 +77,7 @@ describe('resource configuration and selectors', () => {
       ResourceType.MomentumPressure,
       ResourceType.Intent,
       ResourceType.Magic,
+      ResourceType.Flow,
     ])
   })
 
@@ -97,6 +99,7 @@ describe('resource configuration and selectors', () => {
       ResourceType.MomentumPressure,
       ResourceType.Intent,
       ResourceType.Magic,
+      ResourceType.Flow,
     ])
   })
 

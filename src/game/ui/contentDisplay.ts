@@ -17,6 +17,16 @@ import {
   YAN_YAN_RIDGES_SKILL_ID,
 } from '../content/characters/yanYan'
 import { TRAINING_DUMMY_REVENGE_SKILL_ID } from '../content/bosses/trainingDummy'
+import {
+  LIUNIAN_DOMAIN_COUNTER_ID,
+  LIUNIAN_DOMAIN_SKILL_ID,
+  LIUNIAN_FIRST_SKILL_ID,
+  LIUNIAN_FLOW_CHANGE_SKILL_ID,
+  LIUNIAN_FLOW_TRANSFER_STATUS_ID,
+  LIUNIAN_HALVED_MOMENTUM_STATUS_ID,
+  LIUNIAN_NORTH_WIND_SKILL_ID,
+  LIUNIAN_SOUTH_WATER_SKILL_ID,
+} from '../content/characters/liunian'
 
 const skillNames: Record<string, string> = {
   [WANG_DAHAI_FIRST_SKILL_ID]: '新潮式',
@@ -30,6 +40,11 @@ const skillNames: Record<string, string> = {
   [LI_MUTOU_SECOND_SKILL_ID]: '刀域·无边木叶',
   [LI_MUTOU_THIRD_SKILL_ID]: '千山落木，敝叶遮天',
   [TRAINING_DUMMY_REVENGE_SKILL_ID]: '报复',
+  [LIUNIAN_FIRST_SKILL_ID]: '堪舆 / 定穴',
+  [LIUNIAN_DOMAIN_SKILL_ID]: '三生流转',
+  [LIUNIAN_FLOW_CHANGE_SKILL_ID]: '生生流变',
+  [LIUNIAN_NORTH_WIND_SKILL_ID]: '北山风起',
+  [LIUNIAN_SOUTH_WATER_SKILL_ID]: '南阳水来',
 }
 
 const effectNames: Record<string, string> = {
@@ -47,16 +62,20 @@ const effectNames: Record<string, string> = {
   liMutouMicroMomentum: '微势',
   liMutouSpringBlossom: '春华',
   liMutouAutumnFruit: '秋实',
+  liunianFengshui: '风水流年',
 }
 
 const statusNames: Record<string, string> = {
   'status:li-mutou:spring-blossom': '春华',
   'status:li-mutou:autumn-fruit': '秋实',
+  [LIUNIAN_FLOW_TRANSFER_STATUS_ID]: '流转',
+  [LIUNIAN_HALVED_MOMENTUM_STATUS_ID]: '势减半',
 }
 
 const counterNames: Record<string, string> = {
   'counter:wang-dahai:tide': '海潮',
   'counter:li-mutou:blade-domain': '刀域',
+  [LIUNIAN_DOMAIN_COUNTER_ID]: '三生流转',
 }
 
 export function displaySkillName(skillId: string, branchId?: string | null): string | null {
