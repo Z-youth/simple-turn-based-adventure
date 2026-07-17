@@ -29,6 +29,12 @@ import type { ResourceCost } from './resources'
 export interface TurnQueueEntry {
   readonly unitId: UnitId
   readonly speedAtSequenceStart: number
+  readonly kind?: 'sequence' | 'immediate'
+}
+
+export interface OffFieldUnitState {
+  readonly unit: UnitState
+  readonly statusBatches: readonly StatusBatch[]
 }
 
 export interface TurnSequenceState {
@@ -166,6 +172,8 @@ export interface TrainingSessionState {
 export interface BattleState {
   readonly phase: BattlePhase
   readonly units: readonly UnitState[]
+  readonly offFieldUnits?: readonly OffFieldUnitState[]
+  readonly nextDeploymentOrder?: number
   readonly statusBatches: readonly StatusBatch[]
   readonly statusAcquisitionOrders: readonly number[]
   readonly turnSequence: TurnSequenceState | null
@@ -181,5 +189,6 @@ export interface BattleState {
   readonly rngState: RandomState
   readonly log: readonly BattleLogEvent[]
   readonly events: readonly BattleEvent[]
+  readonly outcome?: 'playerVictory' | 'playerDefeat' | null
   readonly trainingSession?: TrainingSessionState | null
 }

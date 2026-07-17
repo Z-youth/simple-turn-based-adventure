@@ -69,6 +69,28 @@ export interface UnitSkippedDeadEvent extends SequenceEventBase {
   readonly unitId: UnitId
 }
 
+export interface BattlefieldUnitEvent {
+  readonly type: 'UNIT_SUMMONED' | 'UNIT_REMOVED' | 'UNIT_RETREATED'
+    | 'UNIT_RETURNED'
+  readonly unitId: UnitId
+  readonly sourceUnitId: UnitId | null
+  readonly effectId: string | null
+}
+
+export interface UnitReplacedEvent {
+  readonly type: 'UNIT_REPLACED'
+  readonly replacedUnitId: UnitId
+  readonly replacementUnitId: UnitId
+  readonly sourceUnitId: UnitId | null
+  readonly effectId: string | null
+}
+
+export interface BattleFinishedEvent {
+  readonly type: 'BATTLE_FINISHED'
+  readonly outcome: 'playerVictory' | 'playerDefeat'
+  readonly reason: 'ALL_ENEMY_UNITS_DEFEATED' | 'ALL_PLAYER_UNITS_DEFEATED'
+}
+
 export interface TurnStartedEvent extends TurnEventBase {
   readonly type: 'TURN_STARTED'
 }
@@ -380,6 +402,9 @@ export type BattleEvent =
   | TrainingFinishedEvent
   | TrainingExitConfirmedEvent
   | UnitSkippedDeadEvent
+  | BattlefieldUnitEvent
+  | UnitReplacedEvent
+  | BattleFinishedEvent
   | TurnStartedEvent
   | TurnStartStageEnteredEvent
   | TurnStartStageCompletedEvent

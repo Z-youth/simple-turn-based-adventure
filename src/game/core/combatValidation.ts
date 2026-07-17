@@ -38,7 +38,10 @@ export function validateBattleRuntimeUnits(
 export function validateBattleStateUnits(
   state: BattleState,
 ): 'INVALID_UNIT_BASE_ATTACK' | null {
-  return validateBattleRuntimeUnits(state.units)
+  return validateBattleRuntimeUnits([
+    ...state.units,
+    ...(state.offFieldUnits ?? []).map((entry) => entry.unit),
+  ])
 }
 
 export function validateCombatUnit(

@@ -206,7 +206,10 @@ function findUnit(state: BattleState, unitId: UnitId): UnitState | undefined {
 }
 
 function hasLivingHostileUnit(state: BattleState, camp: Camp): boolean {
-  return state.units.some((unit) => (
+  return [
+    ...state.units,
+    ...(state.offFieldUnits ?? []).map((entry) => entry.unit),
+  ].some((unit) => (
     unit.camp !== camp && isUnitAlive(unit)
   ))
 }
@@ -217,9 +220,48 @@ function isBattleStopped(state: BattleState): boolean {
 }
 
 function hasLivingPlayerUnit(state: BattleState): boolean {
-  return state.units.some((unit) => (
+  return [
+    ...state.units,
+    ...(state.offFieldUnits ?? []).map((entry) => entry.unit),
+  ].some((unit) => (
     unit.camp === Camp.Player && isUnitAlive(unit)
   ))
+}
+
+export function checkBattleCompletion(
+  state: BattleState,
+): BattleTransitionResult {
+  if (state.trainingSession !== null && state.trainingSession !== undefined) {
+    return applyTrainingCompletion(state)
+  }
+  const knownUnits = [
+    ...state.units,
+    ...(state.offFieldUnits ?? []).map((entry) => entry.unit),
+  ]
+  const hadPlayers = knownUnits.some((unit) => unit.camp === Camp.Player)
+  const hadEnemies = knownUnits.some((unit) => unit.camp === Camp.Enemy)
+  const outcome = hadPlayers && !hasLivingPlayerUnit(state)
+    ? 'playerDefeat'
+    : hadEnemies && !hasLivingHostileUnit(state, Camp.Player)
+      ? 'playerVictory'
+      : null
+  if (outcome === null) return { ok: true, state, events: [] }
+  const event: BattleEvent = {
+    type: 'BATTLE_FINISHED',
+    outcome,
+    reason: outcome === 'playerVictory'
+      ? 'ALL_ENEMY_UNITS_DEFEATED'
+      : 'ALL_PLAYER_UNITS_DEFEATED',
+  }
+  const finished: BattleState = {
+    ...state,
+    phase: BattlePhase.Finished,
+    outcome,
+    activeAction: null,
+    activeSkill: null,
+    actionRollbackState: null,
+  }
+  return { ok: true, state: appendEvents(finished, [event]), events: [event] }
 }
 
 function hasDefeatedFiniteHealthBoss(state: BattleState): boolean {
@@ -1017,13 +1059,13 @@ export function completeCurrentBattleAction(
     completedSkillResolution: null,
     completedResourcePayment: null,
   }, result.events)
-  const trainingCompletion = applyTrainingCompletion(completedState)
-  if (!trainingCompletion.ok) return trainingCompletion
-  if (isBattleStopped(trainingCompletion.state)) {
+  const battleCompletion = checkBattleCompletion(completedState)
+  if (!battleCompletion.ok) return battleCompletion
+  if (isBattleStopped(battleCompletion.state)) {
     return {
       ok: true,
-      state: trainingCompletion.state,
-      events: [...result.events, ...trainingCompletion.events],
+      state: battleCompletion.state,
+      events: [...result.events, ...battleCompletion.events],
     }
   }
   const actorAfterSkill = findUnit(completedState, action.actorId)

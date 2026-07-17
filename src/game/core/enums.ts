@@ -18,6 +18,9 @@ export const Position = {
   Front2: 'front2',
   Back1: 'back1',
   Back2: 'back2',
+  EnemyCenter: 'enemyCenter',
+  EnemyUpper: 'enemyUpper',
+  EnemyLower: 'enemyLower',
 } as const
 
 export type Position = (typeof Position)[keyof typeof Position]

@@ -33,10 +33,6 @@ function getCampPriority(unit: UnitState): number {
   return unit.camp === Camp.Player ? 0 : 1
 }
 
-function getEnemyPriority(unit: UnitState): number {
-  return unit.isBoss ? 0 : 1
-}
-
 export function compareUnitsForTurnOrder(
   left: UnitState,
   right: UnitState,
@@ -56,14 +52,6 @@ export function compareUnitsForTurnOrder(
       getPositionOrderWeight(right.position),
     )
     if (positionComparison !== 0) return positionComparison
-  }
-
-  if (left.camp === Camp.Enemy && right.camp === Camp.Enemy) {
-    const bossComparison = compareNumbers(
-      getEnemyPriority(left),
-      getEnemyPriority(right),
-    )
-    if (bossComparison !== 0) return bossComparison
   }
 
   const deploymentComparison = compareNumbers(

@@ -213,7 +213,7 @@ describe('multi-target and multi-hit skill resolution', () => {
     expect(result.events.at(-1)?.type).toBe('SKILL_RESOLUTION_COMPLETED')
   })
 
-  it('skips the dead caster action-after and turn-end effects after its skill finishes', () => {
+  it('skips dead-caster follow-ups and ends in defeat after its skill finishes', () => {
     const state = createResolvingState([
       actor({ currentHealth: 10 }),
       enemy('target'),
@@ -240,7 +240,15 @@ describe('multi-target and multi-hit skill resolution', () => {
     expect(completed.events.some((event) => (
       event.type === 'TURN_END_STAGE_ENTERED'
     ))).toBe(false)
-    expect(completed.state.personalTurn?.unitId).toBe(unitId('target'))
+    expect(completed.state).toMatchObject({
+      phase: BattlePhase.Finished,
+      outcome: 'playerDefeat',
+    })
+    expect(completed.events).toContainEqual({
+      type: 'BATTLE_FINISHED',
+      outcome: 'playerDefeat',
+      reason: 'ALL_PLAYER_UNITS_DEFEATED',
+    })
   })
 })
 

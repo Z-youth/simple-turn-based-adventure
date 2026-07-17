@@ -48,7 +48,7 @@ describe('turn order', () => {
     ])
   })
 
-  it('puts the boss before equal-speed enemies, then uses deployment order', () => {
+  it('uses stable deployment order for all equal-speed enemies', () => {
     const units = [
       createUnit('enemy-late', {
         camp: Camp.Enemy,
@@ -68,7 +68,7 @@ describe('turn order', () => {
       }),
     ]
 
-    expect(orderedIds(units)).toEqual(['boss', 'enemy-early', 'enemy-late'])
+    expect(orderedIds(units)).toEqual(['enemy-early', 'enemy-late', 'boss'])
   })
 
   it('excludes unplaced players and units already dead at sequence creation', () => {

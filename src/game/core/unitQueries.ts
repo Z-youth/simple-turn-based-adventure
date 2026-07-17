@@ -150,6 +150,12 @@ export function getPositionOrderWeight(position: UnitState['position']): number 
       return 2
     case Position.Back2:
       return 3
+    case Position.EnemyCenter:
+      return 0
+    case Position.EnemyUpper:
+      return 1
+    case Position.EnemyLower:
+      return 2
     case null:
       return Number.POSITIVE_INFINITY
   }
