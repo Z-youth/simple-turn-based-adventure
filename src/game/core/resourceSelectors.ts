@@ -76,9 +76,13 @@ export function canAffordResourceCosts(
     if (!Number.isSafeInteger(total)) return false
     if (total === 0) return true
     const config = getResourceConfig(configuration, resourceType)
+    const paymentMinimum = resourceType === ResourceType.Energy
+      ? Math.max(0, config?.minimum ?? 0)
+      : config?.minimum
     return config !== undefined
       && config.allowSpend
       && (findActiveResourceReductionProtection(unit, resourceType) !== null
-        || readUnitResource(unit, resourceType) - total >= config.minimum)
+        || (paymentMinimum !== undefined
+          && readUnitResource(unit, resourceType) - total >= paymentMinimum))
   })
 }

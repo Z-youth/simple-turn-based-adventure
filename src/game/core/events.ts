@@ -202,7 +202,7 @@ export interface AttackCompletedEvent {
 }
 
 export interface ResourceChangedEvent {
-  readonly type: 'RESOURCE_GAINED' | 'RESOURCE_SPENT'
+  readonly type: 'RESOURCE_GAINED' | 'RESOURCE_LOST' | 'RESOURCE_SPENT'
   readonly unitId: UnitId
   readonly resourceType: ResourceType
   readonly amount: number

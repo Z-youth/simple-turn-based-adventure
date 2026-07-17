@@ -26,6 +26,7 @@ import {
   validateResourceConfiguration,
   validateUnitResourceReductionProtections,
   unitResourcesMatchConfiguration,
+  ResourceType,
 } from './resources'
 
 export interface ResourcePaymentRequest {
@@ -206,7 +207,10 @@ function reserveResourcePayment(
     if (!Number.isSafeInteger(current)) {
       return paymentFailure(state, 'RESOURCE_VALUE_OUT_OF_RANGE')
     }
-    if (current - cost.amount < config.minimum) {
+    const paymentMinimum = cost.resourceType === ResourceType.Energy
+      ? Math.max(0, config.minimum)
+      : config.minimum
+    if (current - cost.amount < paymentMinimum) {
       return paymentFailure(state, 'INSUFFICIENT_RESOURCE')
     }
   }

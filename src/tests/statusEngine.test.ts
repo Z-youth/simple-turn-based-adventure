@@ -252,17 +252,17 @@ describe('status duration', () => {
     expect(result.batches[0].remainingOwnerTurns).toBe(1)
   })
 
-  it('skips the first decrement for a batch acquired during turn end', () => {
+  it('counts the next owner turn end as the first turn for an outside-turn status', () => {
     const original = batch('turn-end', {
       acquiredAt: StatusAcquisitionTiming.TurnEnd,
       skipNextTurnEndDecrement: true,
     })
-    const first = decrementStatusDurations([original], unitId('owner'))
-    const second = decrementStatusDurations(first.batches, unitId('owner'))
+    const added = addStatusBatch([], original)
+    expect(added.ok).toBe(true)
+    if (!added.ok) return
+    const first = decrementStatusDurations(added.batches, unitId('owner'))
 
-    expect(first.batches[0].remainingOwnerTurns).toBe(2)
-    expect(first.batches[0].skipNextTurnEndDecrement).toBe(false)
-    expect(second.batches[0].remainingOwnerTurns).toBe(1)
+    expect(first.batches[0].remainingOwnerTurns).toBe(1)
   })
 
   it('keeps independent batches on independent timers', () => {

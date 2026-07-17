@@ -229,6 +229,33 @@ export function hasFreeMyriadRiversAtTurnEnd(unit: UnitState): boolean {
   ) > 0
 }
 
+export function resetWangDahaiTurnCounters(
+  state: BattleState,
+  turn: PersonalTurnState,
+): WangDahaiEffectResult {
+  if (turn.unitId !== WANG_DAHAI_UNIT_ID) {
+    return { ok: true, state, events: [] }
+  }
+  if (
+    state.phase !== BattlePhase.TurnStart
+    || turn.phase !== PersonalTurnPhase.StartingTurnCounterReset
+  ) return failure(state, 'WANG_DAHAI_NOT_AT_TURN_COUNTER_RESET_STAGE')
+
+  let currentState = state
+  const events: BattleEvent[] = []
+  for (const counterId of [
+    WANG_DAHAI_FREE_MYRIAD_RIVERS_MARKER_ID,
+    WANG_DAHAI_STACKING_WAVE_USE_COUNT_ID,
+    WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
+  ]) {
+    const cleared = clearSpecialCounter(currentState, turn, counterId)
+    if (!cleared.ok) return failure(state, cleared.reason)
+    currentState = cleared.state
+    events.push(...cleared.events)
+  }
+  return { ok: true, state: currentState, events }
+}
+
 export function applyWangDahaiTurnStartPassive(
   state: BattleState,
 ): WangDahaiEffectResult {
@@ -245,18 +272,8 @@ export function applyWangDahaiTurnStartPassive(
     || turn.phase !== PersonalTurnPhase.StartingUnitPassives
   ) return failure(state, 'WANG_DAHAI_NOT_AT_UNIT_PASSIVE_STAGE')
 
-  let passiveState = state
+  const passiveState = state
   const events: BattleEvent[] = []
-  for (const counterId of [
-    WANG_DAHAI_FREE_MYRIAD_RIVERS_MARKER_ID,
-    WANG_DAHAI_STACKING_WAVE_USE_COUNT_ID,
-    WANG_DAHAI_STACKING_WAVE_SKILL_LOCK_ID,
-  ]) {
-    const cleared = clearSpecialCounter(passiveState, turn, counterId)
-    if (!cleared.ok) return failure(state, cleared.reason)
-    passiveState = cleared.state
-    events.push(...cleared.events)
-  }
   if (unit.momentum < HIGH_MOMENTUM_THRESHOLD) {
     const gained = gainResource(passiveState, {
       unitId: unit.id,
@@ -910,6 +927,9 @@ export function useWangDahaiThirdSkill(
 }
 
 export const WANG_DAHAI_BATTLE_EXTENSIONS: BattleEngineExtensions = {
+  resetUnitTurnCounters(state, turn) {
+    return resetWangDahaiTurnCounters(state, turn)
+  },
   applyUnitPassiveEffects(state, turn): BattleTransitionResult {
     if (turn.unitId !== WANG_DAHAI_UNIT_ID) {
       return { ok: true, state, events: [] }

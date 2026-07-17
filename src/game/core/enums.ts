@@ -46,10 +46,13 @@ export type BattlePhase = (typeof BattlePhase)[keyof typeof BattlePhase]
 
 export const PersonalTurnPhase = {
   NotStarted: 'notStarted',
+  StartingAbsoluteEffects: 'startingAbsoluteEffects',
+  StartingTurnCounterReset: 'startingTurnCounterReset',
   StartingDelayedEffects: 'startingDelayedEffects',
   StartingSystemRules: 'startingSystemRules',
   StartingUnitPassives: 'startingUnitPassives',
   StartingStatusEffects: 'startingStatusEffects',
+  StartingForcedChoices: 'startingForcedChoices',
   AwaitingAction: 'awaitingAction',
   ResolvingAction: 'resolvingAction',
   Ending: 'ending',
@@ -66,10 +69,13 @@ export type PersonalTurnPhase =
   (typeof PersonalTurnPhase)[keyof typeof PersonalTurnPhase]
 
 export const TurnStartStage = {
+  AbsoluteEffects: 'absoluteEffects',
+  TurnCounterReset: 'turnCounterReset',
   DelayedEffects: 'delayedEffects',
   SystemRules: 'systemRules',
   UnitPassives: 'unitPassives',
   StatusEffects: 'statusEffects',
+  ForcedChoices: 'forcedChoices',
 } as const
 
 export type TurnStartStage =

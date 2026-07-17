@@ -72,7 +72,7 @@ export type AttackRequest = NormalAttackRequest | ShieldValueAttackRequest
 
 export interface SkillResourceEffectRequest {
   readonly kind: 'resource'
-  readonly operation: 'gain' | 'spend'
+  readonly operation: 'gain' | 'lose' | 'spend'
   readonly unitId: UnitId
   readonly resourceType: ResourceType
   readonly amount: number

@@ -52,6 +52,7 @@ import type { ResourceErrorCode } from './resources'
 import {
   getResourceConfig,
   gainResource,
+  loseResource,
   readUnitResource,
   spendResource,
   unitResourcesMatchConfiguration,
@@ -544,7 +545,11 @@ function resolveSkillTransactionInternal(
       })
 
       if (effect.kind === 'resource') {
-        const change = effect.operation === 'gain' ? gainResource : spendResource
+        const change = effect.operation === 'gain'
+          ? gainResource
+          : effect.operation === 'lose'
+            ? loseResource
+            : spendResource
         const changed = change(effectState(), {
           unitId: effect.unitId,
           resourceType: effect.resourceType,

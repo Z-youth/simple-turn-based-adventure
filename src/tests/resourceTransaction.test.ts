@@ -547,7 +547,7 @@ describe('resource payment lifecycle', () => {
     expect(awaiting.units[0]).toMatchObject({ energy: 5, momentum: 8 })
   })
 
-  it('rejects default negative energy before skill resolution', () => {
+  it('allows negative energy state but still requires non-negative active payment', () => {
     const { resolving } = setup({ energy: -1 })
     const result = resolveResourcePaidSkillTransaction(
       resolving,
@@ -555,8 +555,8 @@ describe('resource payment lifecycle', () => {
       skill(resolving),
     )
 
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.reason).toBe('RESOURCE_VALUE_OUT_OF_RANGE')
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.state.units[0].energy).toBe(-1)
   })
 
   it('rejects forged fixed resource configuration before payment', () => {

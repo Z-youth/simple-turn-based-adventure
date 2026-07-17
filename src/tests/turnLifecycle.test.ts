@@ -80,10 +80,13 @@ describe('personal turn lifecycle', () => {
       .map((event) => event.stage)
 
     expect(stages).toEqual([
+      TurnStartStage.AbsoluteEffects,
+      TurnStartStage.TurnCounterReset,
+      TurnStartStage.DelayedEffects,
       TurnStartStage.UnitPassives,
       TurnStartStage.SystemRules,
-      TurnStartStage.DelayedEffects,
       TurnStartStage.StatusEffects,
+      TurnStartStage.ForcedChoices,
     ])
     expect(result.turn.phase).toBe(PersonalTurnPhase.AwaitingAction)
   })
@@ -94,15 +97,21 @@ describe('personal turn lifecycle', () => {
     if (!created.ok) return
     expect(created.turn.phase).toBe(PersonalTurnPhase.NotStarted)
 
-    const passives = requireTurn(advanceTurnStartStage(created.turn))
+    const absolute = requireTurn(advanceTurnStartStage(created.turn))
+    expect(absolute.phase).toBe(PersonalTurnPhase.StartingAbsoluteEffects)
+    const reset = requireTurn(advanceTurnStartStage(absolute))
+    expect(reset.phase).toBe(PersonalTurnPhase.StartingTurnCounterReset)
+    const delayed = requireTurn(advanceTurnStartStage(reset))
+    expect(delayed.phase).toBe(PersonalTurnPhase.StartingDelayedEffects)
+    const passives = requireTurn(advanceTurnStartStage(delayed))
     expect(passives.phase).toBe(PersonalTurnPhase.StartingUnitPassives)
     const system = requireTurn(advanceTurnStartStage(passives))
     expect(system.phase).toBe(PersonalTurnPhase.StartingSystemRules)
-    const delayed = requireTurn(advanceTurnStartStage(system))
-    expect(delayed.phase).toBe(PersonalTurnPhase.StartingDelayedEffects)
-    const statuses = requireTurn(advanceTurnStartStage(delayed))
+    const statuses = requireTurn(advanceTurnStartStage(system))
     expect(statuses.phase).toBe(PersonalTurnPhase.StartingStatusEffects)
-    const awaiting = requireTurn(advanceTurnStartStage(statuses))
+    const choices = requireTurn(advanceTurnStartStage(statuses))
+    expect(choices.phase).toBe(PersonalTurnPhase.StartingForcedChoices)
+    const awaiting = requireTurn(advanceTurnStartStage(choices))
     expect(awaiting.phase).toBe(PersonalTurnPhase.AwaitingAction)
 
     const invalid = advanceTurnStartStage(awaiting)

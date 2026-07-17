@@ -31,6 +31,33 @@ function runTurnStartPreSystemExtensions(
   return { ok: true, state: currentState, events }
 }
 
+function runTurnStartExtensions(
+  extensions: readonly BattleEngineExtensions[],
+  state: BattleState,
+  turn: PersonalTurnState,
+  select: (extension: BattleEngineExtensions) => (
+    ((state: BattleState, turn: PersonalTurnState) => BattleTransitionResult)
+    | undefined
+  ),
+): BattleTransitionResult {
+  let currentState = state
+  const events: BattleEvent[] = []
+  for (const extension of extensions) {
+    const apply = select(extension)
+    if (apply === undefined) continue
+    const currentTurn = currentState.personalTurn
+    if (currentTurn === null
+      || currentTurn.personalTurnId !== turn.personalTurnId) {
+      return { ok: false, state, events: [], reason: 'INVALID_COMBINED_TURN' }
+    }
+    const result = apply(currentState, currentTurn)
+    if (!result.ok) return { ...result, state, events: [] }
+    currentState = result.state
+    events.push(...result.events)
+  }
+  return { ok: true, state: currentState, events }
+}
+
 function runPassiveExtensions(
   extensions: readonly BattleEngineExtensions[],
   state: BattleState,
@@ -127,6 +154,37 @@ export function combineBattleEngineExtensions(
   ...extensions: readonly BattleEngineExtensions[]
 ): BattleEngineExtensions {
   return {
+    applyUnitBattleStartEffects(state, unitId) {
+      let currentState = state
+      const events: BattleEvent[] = []
+      for (const extension of extensions) {
+        const result = extension.applyUnitBattleStartEffects?.(
+          currentState,
+          unitId,
+        )
+        if (result === undefined) continue
+        if (!result.ok) return { ...result, state, events: [] }
+        currentState = result.state
+        events.push(...result.events)
+      }
+      return { ok: true, state: currentState, events }
+    },
+    applyTurnStartAbsoluteEffects(state, turn) {
+      return runTurnStartExtensions(
+        extensions,
+        state,
+        turn,
+        (extension) => extension.applyTurnStartAbsoluteEffects,
+      )
+    },
+    resetUnitTurnCounters(state, turn) {
+      return runTurnStartExtensions(
+        extensions,
+        state,
+        turn,
+        (extension) => extension.resetUnitTurnCounters,
+      )
+    },
     applySequenceStartEffects(state, sequence) {
       let currentState = state
       const events: BattleEvent[] = []
@@ -147,6 +205,14 @@ export function combineBattleEngineExtensions(
     },
     applyTurnStartPostSystemEffects(state, turn) {
       return runTurnStartPostSystemExtensions(extensions, state, turn)
+    },
+    applyTurnStartForcedChoices(state, turn) {
+      return runTurnStartExtensions(
+        extensions,
+        state,
+        turn,
+        (extension) => extension.applyTurnStartForcedChoices,
+      )
     },
     applyUnitPassiveEffects(state, turn) {
       return runPassiveExtensions(extensions, state, turn)

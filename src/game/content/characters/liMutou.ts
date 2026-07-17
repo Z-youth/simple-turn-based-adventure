@@ -36,9 +36,9 @@ import type {
 import { resolveResourcePaidSkillTransaction } from '../../core/resourceTransaction'
 import {
   gainResource,
+  loseResource,
   ResourceType,
   setResource,
-  spendResource,
 } from '../../core/resources'
 import {
   decreaseSpecialCounter,
@@ -340,7 +340,7 @@ export function applyLiMutouMicroMomentum(
   if (unit === null) return failure(state, 'LI_MUTOU_NOT_FOUND')
   const amount = Math.min(unit.momentum, MICRO_MOMENTUM_REDUCTION)
   if (amount === 0) return { ok: true, state, events: [] }
-  const reduced = spendResource(state, {
+  const reduced = loseResource(state, {
     unitId: unit.id,
     resourceType: ResourceType.Momentum,
     amount,

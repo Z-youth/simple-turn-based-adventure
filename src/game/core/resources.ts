@@ -131,7 +131,7 @@ function freezeResourceConfiguration(
 const DEFAULT_RESOURCE_CONFIGURATION = freezeResourceConfiguration([
   {
     resourceType: ResourceType.Energy,
-    minimum: 0,
+    minimum: Number.MIN_SAFE_INTEGER,
     maximum: null,
     allowGain: true,
     allowSpend: true,
@@ -221,12 +221,12 @@ export function createDefaultResourceConfiguration(
 export function createResourceConfiguration(
   energy: EnergyConfigurationOptions = {},
 ): ResourceConfiguration {
-  const energyMinimum = energy.minimum ?? 0
+  const energyMinimum = energy.minimum ?? Number.MIN_SAFE_INTEGER
   if (!Number.isSafeInteger(energyMinimum) || energyMinimum > 0) {
     throw new RangeError('INVALID_RESOURCE_CONFIGURATION')
   }
   const defaults = createDefaultResourceConfiguration()
-  const configuration: ResourceConfiguration = energyMinimum === 0
+  const configuration: ResourceConfiguration = energyMinimum === Number.MIN_SAFE_INTEGER
     ? defaults
     : freezeResourceConfiguration(
         defaults.resources.map((config) => (
@@ -362,7 +362,7 @@ function getReservedResourceAmount(
 function changeResource(
   state: BattleState,
   request: ResourceChangeRequest,
-  kind: 'gain' | 'spend',
+  kind: 'gain' | 'lose' | 'spend',
 ): ResourceChangeResult {
   const invalidConfiguration = validateResourceConfiguration(
     state.resourceConfiguration,
@@ -383,7 +383,7 @@ function changeResource(
   )
   if (config === undefined) return failure(state, 'RESOURCE_NOT_SUPPORTED')
   if ((kind === 'gain' && !config.allowGain)
-    || (kind === 'spend' && !config.allowSpend)) {
+    || (kind !== 'gain' && !config.allowSpend)) {
     return failure(state, 'RESOURCE_OPERATION_NOT_ALLOWED')
   }
   const before = readUnitResource(unit, request.resourceType)
@@ -392,7 +392,7 @@ function changeResource(
     || (config.maximum !== null && before > config.maximum)) {
     return failure(state, 'RESOURCE_VALUE_OUT_OF_RANGE')
   }
-  if (kind === 'spend') {
+  if (kind !== 'gain') {
     const protection = findActiveResourceReductionProtection(
       unit,
       request.resourceType,
@@ -421,17 +421,20 @@ function changeResource(
       }
     }
   }
-  const reservedAmount = kind === 'spend'
+  const reservedAmount = kind !== 'gain'
     ? getReservedResourceAmount(state, request)
     : 0
-  if (kind === 'spend' && before - reservedAmount - request.amount < config.minimum) {
+  const minimum = kind === 'spend' && request.resourceType === ResourceType.Energy
+    ? Math.max(0, config.minimum)
+    : config.minimum
+  if (kind !== 'gain' && before - reservedAmount - request.amount < minimum) {
     return failure(state, 'INSUFFICIENT_RESOURCE')
   }
   const rawAfter = kind === 'gain'
     ? before + request.amount
     : before - request.amount
   if (!Number.isSafeInteger(rawAfter)) {
-    return failure(state, kind === 'spend'
+    return failure(state, kind !== 'gain'
       ? 'INSUFFICIENT_RESOURCE'
       : 'RESOURCE_VALUE_OUT_OF_RANGE')
   }
@@ -447,7 +450,11 @@ function changeResource(
   }
   const replacement = replaceUnitResource(unit, request.resourceType, after)
   const event: BattleEvent = {
-    type: kind === 'gain' ? 'RESOURCE_GAINED' : 'RESOURCE_SPENT',
+    type: kind === 'gain'
+      ? 'RESOURCE_GAINED'
+      : kind === 'lose'
+        ? 'RESOURCE_LOST'
+        : 'RESOURCE_SPENT',
     unitId: request.unitId,
     resourceType: request.resourceType,
     amount: actualAmount,
@@ -488,6 +495,13 @@ export function spendResource(
   request: ResourceChangeRequest,
 ): ResourceChangeResult {
   return changeResource(state, request, 'spend')
+}
+
+export function loseResource(
+  state: BattleState,
+  request: ResourceChangeRequest,
+): ResourceChangeResult {
+  return changeResource(state, request, 'lose')
 }
 
 export function setResource(

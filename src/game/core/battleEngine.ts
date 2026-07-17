@@ -61,6 +61,18 @@ export type BattleTransitionResult =
   | BattleTransitionFailure
 
 export interface BattleEngineExtensions {
+  readonly applyUnitBattleStartEffects?: (
+    state: BattleState,
+    unitId: UnitId,
+  ) => BattleTransitionResult
+  readonly applyTurnStartAbsoluteEffects?: (
+    state: BattleState,
+    turn: PersonalTurnState,
+  ) => BattleTransitionResult
+  readonly resetUnitTurnCounters?: (
+    state: BattleState,
+    turn: PersonalTurnState,
+  ) => BattleTransitionResult
   readonly applySequenceStartEffects?: (
     state: BattleState,
     sequence: TurnSequenceState,
@@ -70,6 +82,10 @@ export interface BattleEngineExtensions {
     turn: PersonalTurnState,
   ) => BattleTransitionResult
   readonly applyTurnStartPostSystemEffects?: (
+    state: BattleState,
+    turn: PersonalTurnState,
+  ) => BattleTransitionResult
+  readonly applyTurnStartForcedChoices?: (
     state: BattleState,
     turn: PersonalTurnState,
   ) => BattleTransitionResult
@@ -151,6 +167,37 @@ function applySequenceStartEffects(
     ok: true,
     state: { ...result.state, events: state.events },
     events: result.events,
+  }
+}
+
+function applyBattleStartEffects(
+  state: BattleState,
+  extensions?: BattleEngineExtensions,
+): BattleTransitionResult {
+  const queue = createTurnQueue(state.units)
+  if (!queue.ok) return failure(state, queue.reason)
+  let currentState = state
+  const events: BattleEvent[] = []
+  for (const entry of queue.queue) {
+    const result = extensions?.applyUnitBattleStartEffects?.(
+      currentState,
+      entry.unitId,
+    )
+    if (result === undefined) continue
+    if (!result.ok) return failure(state, result.reason)
+    if (
+      result.state.phase !== BattlePhase.Setup
+      || result.state.turnSequence !== null
+      || result.state.personalTurn !== null
+      || result.state.activeAction !== null
+    ) return failure(state, 'BATTLE_START_EFFECTS_INVALID_STATE')
+    currentState = { ...result.state, events: state.events }
+    events.push(...result.events)
+  }
+  return {
+    ok: true,
+    state: appendEvents({ ...currentState, events: state.events }, events),
+    events,
   }
 }
 
@@ -335,7 +382,40 @@ function advanceToNextLivingTurnStart(
       turn = stageResult.turn
       turnState = { ...turnState, personalTurn: turn }
       events.push(...stageResult.events)
-      if (turn.phase === PersonalTurnPhase.StartingSystemRules) {
+      if (turn.phase === PersonalTurnPhase.StartingAbsoluteEffects) {
+        const result = extensions?.applyTurnStartAbsoluteEffects?.(
+          turnState,
+          turn,
+        )
+        if (result !== undefined) {
+          if (!result.ok) return failure(state, result.reason)
+          const nextTurn = result.state.personalTurn
+          if (
+            nextTurn === null
+            || nextTurn.personalTurnId !== turn.personalTurnId
+            || nextTurn.phase !== PersonalTurnPhase.StartingAbsoluteEffects
+          ) return failure(state, 'TURN_START_ABSOLUTE_EFFECTS_INVALID_TURN')
+          turnState = { ...result.state, events: turnState.events }
+          turn = nextTurn
+          events.push(...result.events)
+        }
+      }
+      if (turn.phase === PersonalTurnPhase.StartingTurnCounterReset) {
+        const result = extensions?.resetUnitTurnCounters?.(turnState, turn)
+        if (result !== undefined) {
+          if (!result.ok) return failure(state, result.reason)
+          const nextTurn = result.state.personalTurn
+          if (
+            nextTurn === null
+            || nextTurn.personalTurnId !== turn.personalTurnId
+            || nextTurn.phase !== PersonalTurnPhase.StartingTurnCounterReset
+          ) return failure(state, 'TURN_COUNTER_RESET_INVALID_TURN')
+          turnState = { ...result.state, events: turnState.events }
+          turn = nextTurn
+          events.push(...result.events)
+        }
+      }
+      if (turn.phase === PersonalTurnPhase.StartingDelayedEffects) {
         const preSystemResult = extensions?.applyTurnStartPreSystemEffects?.(
           turnState,
           turn,
@@ -346,7 +426,7 @@ function advanceToNextLivingTurnStart(
           if (
             preSystemTurn === null
             || preSystemTurn.personalTurnId !== turn.personalTurnId
-            || preSystemTurn.phase !== PersonalTurnPhase.StartingSystemRules
+            || preSystemTurn.phase !== PersonalTurnPhase.StartingDelayedEffects
           ) return failure(state, 'TURN_START_PRE_SYSTEM_EFFECTS_INVALID_TURN')
           turnState = {
             ...preSystemResult.state,
@@ -355,6 +435,8 @@ function advanceToNextLivingTurnStart(
           turn = preSystemTurn
           events.push(...preSystemResult.events)
         }
+      }
+      if (turn.phase === PersonalTurnPhase.StartingSystemRules) {
         const pressureResult = recalculateMomentumPressure(
           turnState,
           unit.id,
@@ -408,6 +490,21 @@ function advanceToNextLivingTurnStart(
         }
         turn = { ...turn, unitPassiveEffectsApplied: true }
         turnState = { ...turnState, personalTurn: turn }
+      }
+      if (turn.phase === PersonalTurnPhase.StartingForcedChoices) {
+        const result = extensions?.applyTurnStartForcedChoices?.(turnState, turn)
+        if (result !== undefined) {
+          if (!result.ok) return failure(state, result.reason)
+          const nextTurn = result.state.personalTurn
+          if (
+            nextTurn === null
+            || nextTurn.personalTurnId !== turn.personalTurnId
+            || nextTurn.phase !== PersonalTurnPhase.StartingForcedChoices
+          ) return failure(state, 'TURN_START_FORCED_CHOICES_INVALID_TURN')
+          turnState = { ...result.state, events: turnState.events }
+          turn = nextTurn
+          events.push(...result.events)
+        }
       }
     }
     const nextState: BattleState = {
@@ -603,10 +700,19 @@ export function startTrainingBattle(
     ...state,
     trainingSession: null,
   }
-  return startBattleSequence({
+  const withSession: BattleState = {
     ...state,
     trainingSession: { initialState },
-  }, extensions)
+  }
+  const started = applyBattleStartEffects(withSession, extensions)
+  if (!started.ok) return failure(state, started.reason)
+  const sequence = startBattleSequence(started.state, extensions)
+  if (!sequence.ok) return sequence
+  return {
+    ok: true,
+    state: sequence.state,
+    events: [...started.events, ...sequence.events],
+  }
 }
 
 export function resetTrainingBattle(
@@ -621,10 +727,19 @@ export function resetTrainingBattle(
     return failure(state, 'TRAINING_RESET_DURING_ACTION')
   }
 
-  return startBattleSequence({
+  const resetState: BattleState = {
     ...session.initialState,
     trainingSession: session,
-  }, extensions)
+  }
+  const started = applyBattleStartEffects(resetState, extensions)
+  if (!started.ok) return failure(state, started.reason)
+  const sequence = startBattleSequence(started.state, extensions)
+  if (!sequence.ok) return sequence
+  return {
+    ok: true,
+    state: sequence.state,
+    events: [...started.events, ...sequence.events],
+  }
 }
 
 export function pauseTrainingBattle(

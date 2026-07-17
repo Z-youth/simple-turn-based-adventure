@@ -177,7 +177,7 @@ describe('Li Mutou base state and micro momentum', () => {
     expect(state.units.find((unit) => unit.id === LI_MUTOU_UNIT_ID))
       .toMatchObject({ momentum: 39, momentumPressure: 0 })
     const reductionIndex = state.events.findIndex((event) => (
-      event.type === 'RESOURCE_SPENT' && event.reason === 'liMutouMicroMomentum'
+      event.type === 'RESOURCE_LOST' && event.reason === 'liMutouMicroMomentum'
     ))
     const pressureIndex = state.events.findIndex((event) => (
       event.type === 'MOMENTUM_PRESSURE_RECALCULATED'

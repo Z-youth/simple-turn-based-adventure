@@ -12,10 +12,13 @@ import type { UnitState } from './units'
 import { validateBattleRuntimeUnits } from './combatValidation'
 
 export const TURN_START_STAGE_ORDER: readonly TurnStartStageType[] = [
+  TurnStartStage.AbsoluteEffects,
+  TurnStartStage.TurnCounterReset,
+  TurnStartStage.DelayedEffects,
   TurnStartStage.UnitPassives,
   TurnStartStage.SystemRules,
-  TurnStartStage.DelayedEffects,
   TurnStartStage.StatusEffects,
+  TurnStartStage.ForcedChoices,
 ]
 
 export const TURN_END_STAGE_ORDER: readonly TurnEndStageType[] = [
@@ -158,8 +161,41 @@ export function advanceTurnStartStage(
     case PersonalTurnPhase.NotStarted:
       return {
         ok: true,
-        turn: { ...turn, phase: PersonalTurnPhase.StartingUnitPassives },
-        events: [startStageEnteredEvent(turn, TurnStartStage.UnitPassives)],
+        turn: { ...turn, phase: PersonalTurnPhase.StartingAbsoluteEffects },
+        events: [startStageEnteredEvent(turn, TurnStartStage.AbsoluteEffects)],
+      }
+    case PersonalTurnPhase.StartingAbsoluteEffects:
+      return {
+        ok: true,
+        turn: {
+          ...turn,
+          phase: PersonalTurnPhase.StartingTurnCounterReset,
+        },
+        events: [
+          startStageCompletedEvent(turn, TurnStartStage.AbsoluteEffects),
+          startStageEnteredEvent(turn, TurnStartStage.TurnCounterReset),
+        ],
+      }
+    case PersonalTurnPhase.StartingTurnCounterReset:
+      return {
+        ok: true,
+        turn: { ...turn, phase: PersonalTurnPhase.StartingDelayedEffects },
+        events: [
+          startStageCompletedEvent(turn, TurnStartStage.TurnCounterReset),
+          startStageEnteredEvent(turn, TurnStartStage.DelayedEffects),
+        ],
+      }
+    case PersonalTurnPhase.StartingDelayedEffects:
+      return {
+        ok: true,
+        turn: {
+          ...turn,
+          phase: PersonalTurnPhase.StartingUnitPassives,
+        },
+        events: [
+          startStageCompletedEvent(turn, TurnStartStage.DelayedEffects),
+          startStageEnteredEvent(turn, TurnStartStage.UnitPassives),
+        ],
       }
     case PersonalTurnPhase.StartingUnitPassives:
       return {
@@ -177,29 +213,26 @@ export function advanceTurnStartStage(
     case PersonalTurnPhase.StartingSystemRules:
       return {
         ok: true,
-        turn: { ...turn, phase: PersonalTurnPhase.StartingDelayedEffects },
+        turn: { ...turn, phase: PersonalTurnPhase.StartingStatusEffects },
         events: [
           startStageCompletedEvent(turn, TurnStartStage.SystemRules),
-          startStageEnteredEvent(turn, TurnStartStage.DelayedEffects),
-        ],
-      }
-    case PersonalTurnPhase.StartingDelayedEffects:
-      return {
-        ok: true,
-        turn: {
-          ...turn,
-          phase: PersonalTurnPhase.StartingStatusEffects,
-        },
-        events: [
-          startStageCompletedEvent(turn, TurnStartStage.DelayedEffects),
           startStageEnteredEvent(turn, TurnStartStage.StatusEffects),
         ],
       }
     case PersonalTurnPhase.StartingStatusEffects:
       return {
         ok: true,
+        turn: { ...turn, phase: PersonalTurnPhase.StartingForcedChoices },
+        events: [
+          startStageCompletedEvent(turn, TurnStartStage.StatusEffects),
+          startStageEnteredEvent(turn, TurnStartStage.ForcedChoices),
+        ],
+      }
+    case PersonalTurnPhase.StartingForcedChoices:
+      return {
+        ok: true,
         turn: { ...turn, phase: PersonalTurnPhase.AwaitingAction },
-        events: [startStageCompletedEvent(turn, TurnStartStage.StatusEffects)],
+        events: [startStageCompletedEvent(turn, TurnStartStage.ForcedChoices)],
       }
     default:
       return { ok: false, reason: 'TURN_START_STAGE_CANNOT_ADVANCE' }

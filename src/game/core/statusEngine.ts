@@ -274,11 +274,6 @@ function decrementStatusDurations(
       nextBatches.push(batch)
       continue
     }
-    if (batch.skipNextTurnEndDecrement) {
-      nextBatches.push({ ...batch, skipNextTurnEndDecrement: false })
-      continue
-    }
-
     const remainingOwnerTurns = batch.remainingOwnerTurns - 1
     const decremented = { ...batch, remainingOwnerTurns }
     events.push(statusEvent('STATUS_DURATION_DECREMENTED', decremented))
@@ -445,7 +440,11 @@ export function addStatusToBattle(
   incoming: StatusBatch,
   origin: StatusEventOrigin = defaultStatusOrigin(incoming),
 ): BattleStatusResult {
-  if (!state.units.some((unit) => unit.id === incoming.ownerUnitId)) {
+  const normalizedIncoming: StatusBatch = {
+    ...incoming,
+    skipNextTurnEndDecrement: false,
+  }
+  if (!state.units.some((unit) => unit.id === normalizedIncoming.ownerUnitId)) {
     return {
       ok: false,
       state,
@@ -457,7 +456,11 @@ export function addStatusToBattle(
   if (invalidRegistry !== null) {
     return { ok: false, state, events: [], reason: invalidRegistry }
   }
-  const operation = addStatusBatch(state.statusBatches, incoming, origin)
+  const operation = addStatusBatch(
+    state.statusBatches,
+    normalizedIncoming,
+    origin,
+  )
   if (!operation.ok) return commitStatusOperation(state, operation)
   const createsBatch = operation.events.some((event) => (
     event.type === 'STATUS_ACQUIRED'
@@ -465,7 +468,7 @@ export function addStatusToBattle(
   ))
   if (
     createsBatch
-    && state.statusAcquisitionOrders.includes(incoming.acquisitionOrder)
+    && state.statusAcquisitionOrders.includes(normalizedIncoming.acquisitionOrder)
   ) {
     return {
       ok: false,
@@ -482,7 +485,7 @@ export function addStatusToBattle(
       ...committed.state,
       statusAcquisitionOrders: [
         ...state.statusAcquisitionOrders,
-        incoming.acquisitionOrder,
+        normalizedIncoming.acquisitionOrder,
       ],
     },
   }

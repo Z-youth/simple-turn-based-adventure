@@ -3,6 +3,7 @@ import {
   createDefaultResourceConfiguration,
   createResourceConfiguration,
   gainResource,
+  loseResource,
   RESOURCE_TYPE_ORDER,
   resolveResourceFormulaValue,
   ResourceType,
@@ -41,7 +42,7 @@ function request(
 }
 
 describe('resource configuration and selectors', () => {
-  it('defines five default resources with non-negative minima and no maxima', () => {
+  it('allows non-payment energy loss below zero while other resources stay non-negative', () => {
     const configuration = createDefaultResourceConfiguration()
 
     expect(configuration.resources.map((item) => item.resourceType)).toEqual([
@@ -52,7 +53,9 @@ describe('resource configuration and selectors', () => {
       'magic',
     ])
     for (const resourceType of Object.values(ResourceType)) {
-      expect(getResourceMinimum(configuration, resourceType)).toBe(0)
+      expect(getResourceMinimum(configuration, resourceType)).toBe(
+        resourceType === ResourceType.Energy ? Number.MIN_SAFE_INTEGER : 0,
+      )
       expect(getResourceMaximum(configuration, resourceType)).toBeNull()
     }
   })
@@ -509,26 +512,27 @@ describe('controlled resource gain and spend', () => {
     })
   })
 
-  it('allows configured negative energy only down to its trusted minimum', () => {
+  it('distinguishes non-payment loss from active spending below zero', () => {
     const state = {
       ...createBattleState([createUnit('owner')]),
       resourceConfiguration: createResourceConfiguration({ minimum: -5 }),
     }
-    const allowed = spendResource(state, request(ResourceType.Energy, 5))
-    const rejected = spendResource(state, request(ResourceType.Energy, 6))
+    const allowed = loseResource(state, request(ResourceType.Energy, 5))
+    const rejected = spendResource(state, request(ResourceType.Energy, 1))
 
     expect(allowed.ok).toBe(true)
     if (allowed.ok) expect(allowed.state.units[0].energy).toBe(-5)
     expect(rejected.ok).toBe(false)
     if (!rejected.ok) expect(rejected.reason).toBe('INSUFFICIENT_RESOURCE')
+    if (allowed.ok) expect(allowed.events[0]?.type).toBe('RESOURCE_LOST')
   })
 
-  it('does not allow default battle state to operate on negative energy', () => {
+  it('allows a default battle state to recover from negative energy', () => {
     const state = createBattleState([createUnit('owner', { energy: -1 })])
     const result = gainResource(state, request(ResourceType.Energy, 1))
 
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.reason).toBe('RESOURCE_VALUE_OUT_OF_RANGE')
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.state.units[0].energy).toBe(0)
   })
 
   it.each(['gain', 'spend'] as const)(

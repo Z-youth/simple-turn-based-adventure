@@ -6,6 +6,7 @@ import {
   TurnEndStage,
 } from '../game/core/enums'
 import type { StatusBatch } from '../game/core/statuses'
+import { addStatusToBattle } from '../game/core/statusEngine'
 import {
   endCurrentPersonalTurn,
   startBattleSequence,
@@ -34,6 +35,60 @@ function timedStatus(owner: string, remainingOwnerTurns: number): StatusBatch {
 }
 
 describe('status duration lifecycle integration', () => {
+  it('counts the current owner turn when a status is gained during that turn', () => {
+    const started = startBattleSequence(createBattleState([
+      createUnit('owner', { speed: 200 }),
+      createUnit('next', { speed: 100 }),
+    ]))
+    expect(started.ok).toBe(true)
+    if (!started.ok || started.state.personalTurn === null) return
+    const added = addStatusToBattle(
+      started.state,
+      timedStatus('owner', 1),
+    )
+    expect(added.ok).toBe(true)
+    if (!added.ok) return
+    const ended = endCurrentPersonalTurn(
+      added.state,
+      started.state.personalTurn.personalTurnId,
+    )
+
+    expect(ended.ok).toBe(true)
+    if (ended.ok) expect(ended.state.statusBatches).toEqual([])
+  })
+
+  it('counts the next owner turn when a status is gained outside that turn', () => {
+    const started = startBattleSequence(createBattleState([
+      createUnit('current', { speed: 200 }),
+      createUnit('owner', { speed: 100, position: 'front2' }),
+    ]))
+    expect(started.ok).toBe(true)
+    if (!started.ok || started.state.personalTurn === null) return
+    const added = addStatusToBattle(started.state, {
+      ...timedStatus('owner', 1),
+      acquiredAt: StatusAcquisitionTiming.External,
+      skipNextTurnEndDecrement: true,
+    })
+    expect(added.ok).toBe(true)
+    if (!added.ok) return
+    const afterCurrent = endCurrentPersonalTurn(
+      added.state,
+      started.state.personalTurn.personalTurnId,
+    )
+    expect(afterCurrent.ok).toBe(true)
+    if (!afterCurrent.ok || afterCurrent.state.personalTurn === null) return
+    expect(afterCurrent.state.statusBatches[0]?.remainingOwnerTurns).toBe(1)
+    expect(afterCurrent.state.statusBatches[0]?.skipNextTurnEndDecrement)
+      .toBe(false)
+    const afterOwner = endCurrentPersonalTurn(
+      afterCurrent.state,
+      afterCurrent.state.personalTurn.personalTurnId,
+    )
+
+    expect(afterOwner.ok).toBe(true)
+    if (afterOwner.ok) expect(afterOwner.state.statusBatches).toEqual([])
+  })
+
   it('decrements status inside the controlled status-duration stage', () => {
     const initial = {
       ...createBattleState([
